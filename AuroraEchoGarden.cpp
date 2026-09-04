@@ -21,10 +21,10 @@ constexpr float  kPi              = 3.14159265358979323846f;
 
 Hardware hw;
 DelayLine<float, kMaxDelaySamples> DSY_SDRAM_BSS delay_lines[kNumLines];
-ReverbSc reverb;
+ReverbSc DSY_SDRAM_BSS reverb;
 
 float smooth_delay[kNumLines] = {24000.0f, 32000.0f, 40000.0f, 48000.0f};
-float feedback_lp[kNumLines]  = {0.0f, 0.0f, 0.0f, 0.0f};
+float feedback_lp[kNumLines]  = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
 bool freeze_latched   = false;
 bool pingpong_latched = false;
