@@ -1,6 +1,7 @@
 /**
- * Aurora EchoGarden
+ * Aurora EchoGarden v0.2
  * Four-line feedback echo + lush stereo reverb for Qu-Bit Aurora.
+ * Adds color-coded live LED metering for knob edits.
  *
  * Built against the public Qu-Bit Aurora-SDK hardware API and DaisySP.
  */
@@ -8,6 +9,7 @@
 #include "daisysp.h"
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 using namespace daisy;
 using namespace daisysp;
@@ -18,6 +20,8 @@ namespace
 constexpr size_t kNumLines        = 4;
 constexpr size_t kMaxDelaySamples = 192000;
 constexpr float  kPi              = 3.14159265358979323846f;
+constexpr float  kVisualMoveThreshold = 0.006f;
+constexpr uint32_t kVisualHoldCallbacks = 425; // about 0.85 s at 48k / 96 samples
 
 Hardware hw;
 DelayLine<float, kMaxDelaySamples> DSY_SDRAM_BSS delay_lines[kNumLines];
@@ -38,9 +42,82 @@ volatile bool  ui_freeze       = false;
 volatile bool  ui_pingpong     = false;
 volatile bool  ui_bloom        = false;
 
+enum VisualParam
+{
+    VIS_TIME = 0,
+    VIS_FEEDBACK,
+    VIS_MIX,
+    VIS_LINES,
+    VIS_REVERB,
+    VIS_WARP,
+    VIS_NONE
+};
+
+volatile int      ui_visual_param = VIS_NONE;
+volatile float    ui_visual_value = 0.0f;
+volatile uint32_t ui_visual_hold  = 0;
+float last_visual_knob[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+bool visual_tracking_ready = false;
+
+struct Rgb
+{
+    float r;
+    float g;
+    float b;
+};
+
 inline float Clamp01(float x) { return fclamp(x, 0.0f, 1.0f); }
 inline float KnobCv(int knob, int cv) { return Clamp01(hw.GetKnobValue(knob) + hw.GetCvValue(cv)); }
 inline float SoftLimit(float x) { return tanhf(x); }
+
+Rgb GetVisualColor(int param)
+{
+    switch(param)
+    {
+        case VIS_TIME:     return {0.0f, 0.10f, 1.00f}; // blue
+        case VIS_FEEDBACK: return {1.0f, 0.18f, 0.00f}; // orange/red
+        case VIS_MIX:      return {0.10f, 0.78f, 1.00f}; // cyan
+        case VIS_LINES:    return {0.08f, 1.00f, 0.24f}; // green
+        case VIS_REVERB:   return {0.78f, 0.08f, 1.00f}; // violet
+        case VIS_WARP:     return {1.00f, 0.52f, 0.03f}; // amber
+        default:           return {0.25f, 0.25f, 0.25f};
+    }
+}
+
+void TrackVisualChange(const float raw_knob[6], const float effective_value[6])
+{
+    if(!visual_tracking_ready)
+    {
+        for(int i = 0; i < 6; ++i)
+            last_visual_knob[i] = raw_knob[i];
+        visual_tracking_ready = true;
+        return;
+    }
+
+    int changed = -1;
+    float largest_delta = 0.0f;
+    for(int i = 0; i < 6; ++i)
+    {
+        const float delta = fabsf(raw_knob[i] - last_visual_knob[i]);
+        if(delta > largest_delta)
+        {
+            largest_delta = delta;
+            changed = i;
+        }
+    }
+
+    if(changed >= 0 && largest_delta >= kVisualMoveThreshold)
+    {
+        last_visual_knob[changed] = raw_knob[changed];
+        ui_visual_param = changed;
+        ui_visual_value = Clamp01(effective_value[changed]);
+        ui_visual_hold = kVisualHoldCallbacks;
+    }
+    else if(ui_visual_hold > 0)
+    {
+        --ui_visual_hold;
+    }
+}
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)
 {
@@ -61,6 +138,25 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     const float spread = Clamp01(hw.GetKnobValue(KNOB_WARP) + (hw.GetWarpVoct() / 60.0f));
 
     const int active_lines = 1 + static_cast<int>(line_control * 3.999f);
+
+    const float raw_knob[6] = {
+        hw.GetKnobValue(KNOB_TIME),
+        hw.GetKnobValue(KNOB_REFLECT),
+        hw.GetKnobValue(KNOB_MIX),
+        hw.GetKnobValue(KNOB_ATMOSPHERE),
+        hw.GetKnobValue(KNOB_BLUR),
+        hw.GetKnobValue(KNOB_WARP)
+    };
+    const float effective_visual[6] = {
+        time_control,
+        feedback_control,
+        mix,
+        static_cast<float>(active_lines - 1) / 3.0f,
+        reverb_send,
+        spread
+    };
+    TrackVisualChange(raw_knob, effective_visual);
+
     const float base_seconds = fmap(time_control, 0.015f, 1.8f, Mapping::LOG);
     const float sample_rate = hw.AudioSampleRate();
 
@@ -149,9 +245,41 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     ui_bloom = bloom;
 }
 
-void UpdateLeds()
+void DrawEditMeter()
 {
-    hw.ClearLeds();
+    static float pulse_phase = 0.0f;
+    pulse_phase += 0.30f;
+    if(pulse_phase > 2.0f * kPi)
+        pulse_phase -= 2.0f * kPi;
+
+    const int param = ui_visual_param;
+    const float value = Clamp01(ui_visual_value);
+    const Rgb color = GetVisualColor(param);
+    const float pulse = 0.72f + 0.28f * (0.5f + 0.5f * sinf(pulse_phase));
+    const float level = value * 6.0f;
+    const float value_brightness = 0.08f + 0.92f * value;
+
+    for(int i = 0; i < 6; ++i)
+    {
+        float segment = Clamp01(level - static_cast<float>(i));
+        if(i == 0)
+            segment = fmaxf(segment, 0.12f); // always leave a dim color cue at minimum
+        const float intensity = value_brightness * (0.10f + 0.90f * segment) * pulse;
+        hw.SetLed(static_cast<Leds>(LED_1 + i),
+                  color.r * intensity,
+                  color.g * intensity,
+                  color.b * intensity);
+    }
+
+    // A soft three-LED underline makes the active color easy to recognize.
+    const float underline = (0.08f + 0.20f * value) * pulse;
+    hw.SetLed(LED_BOT_1, color.r * underline, color.g * underline, color.b * underline);
+    hw.SetLed(LED_BOT_2, color.r * underline, color.g * underline, color.b * underline);
+    hw.SetLed(LED_BOT_3, color.r * underline, color.g * underline, color.b * underline);
+}
+
+void DrawNormalStatus()
+{
     for(int j = 0; j < 4; ++j)
     {
         const float on = j < ui_active_lines ? 1.0f : 0.04f;
@@ -162,6 +290,18 @@ void UpdateLeds()
     hw.SetLed(LED_BOT_1, ui_mix * 0.40f, ui_mix * 0.40f, ui_mix * 0.40f);
     hw.SetLed(LED_BOT_2, 0.0f, ui_spread * 0.25f, ui_spread * 0.75f);
     hw.SetLed(LED_BOT_3, ui_bloom ? 0.75f : 0.0f, ui_bloom ? 0.18f : 0.0f, ui_bloom ? 0.75f : 0.0f);
+}
+
+void UpdateLeds()
+{
+    hw.ClearLeds();
+
+    if(ui_visual_hold > 0 && ui_visual_param != VIS_NONE)
+        DrawEditMeter();
+    else
+        DrawNormalStatus();
+
+    // Mode LEDs remain readable even while the parameter meter is active.
     hw.SetLed(LED_FREEZE, ui_freeze ? 0.85f : 0.0f, ui_freeze ? 0.85f : 0.0f, ui_freeze ? 0.95f : 0.0f);
     hw.SetLed(LED_REVERSE, 0.0f, ui_pingpong ? 0.55f : 0.0f, ui_pingpong ? 0.95f : 0.0f);
     hw.WriteLeds();
