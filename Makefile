@@ -1,6 +1,6 @@
 TARGET = AuroraEchoGarden
 APP_TYPE = BOOT_SRAM
-CPP_SOURCES = AuroraEchoGarden.cpp
+CPP_SOURCES = AuroraEchoGardenStable.cpp
 AURORA_SDK_PATH ?= ../Aurora-SDK
 C_INCLUDES += -I$(AURORA_SDK_PATH)/include/
 LIBDAISY_DIR = $(AURORA_SDK_PATH)/libs/libDaisy/
