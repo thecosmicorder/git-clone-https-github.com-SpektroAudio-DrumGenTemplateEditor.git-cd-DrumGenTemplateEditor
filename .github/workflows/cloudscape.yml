@@ -27,36 +27,9 @@ jobs:
           git submodule update --init --recursive
           ./ci/build_libs.sh
 
-      - name: Fetch Clouds Nimbus DSP
-        run: |
-          git clone --depth 1 https://github.com/electro-smith/DaisyExamples DaisyExamples
-          cp -R DaisyExamples/patch/Nimbus/dsp AuroraCloudscape/dsp
-          cp DaisyExamples/patch/Nimbus/resources.cpp AuroraCloudscape/resources.cpp
-          cp DaisyExamples/patch/Nimbus/resources.h AuroraCloudscape/resources.h
-          cp DaisyExamples/patch/Nimbus/buffer_allocator.h AuroraCloudscape/buffer_allocator.h
-          cp DaisyExamples/patch/Nimbus/parameter_interpolator.h AuroraCloudscape/parameter_interpolator.h
-          cp DaisyExamples/patch/Nimbus/shy_fft.h AuroraCloudscape/shy_fft.h
-          cp DaisyExamples/patch/Nimbus/stmtemp.h AuroraCloudscape/stmtemp.h
-          # Keep the large Clouds work buffer out of Aurora's 128 KB DTCM.
-          sed -i 's/DTCMRAM uint8_t block_ccm/D2RAM uint8_t block_ccm/' AuroraCloudscape/AuroraCloudscape.cpp
-
-      - name: Prepare Cloudscape linker layout
-        run: |
-          cp Aurora-SDK/libs/libDaisy/core/STM32H750IB_sram.lds AuroraCloudscape/cloudscape_sram.lds
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('AuroraCloudscape/cloudscape_sram.lds')
-          s = p.read_text()
-          old = '''\t.bss (NOLOAD) :\n\t{\n\t\t. = ALIGN(4);\n\t\t_sbss = .;\n\n\t\tPROVIDE(__bss_start__ = _sbss);\n\t\t*(.bss)\n\t\t*(.bss*)\n\t\t*(COMMON)\n\t\t. = ALIGN(4);\n\t\t_ebss = .;\n\n\t\tPROVIDE(__bss_end__ = _ebss);\n\t} > DTCMRAM '''
-          new = old.replace('> DTCMRAM ', '> RAM_D2 ')
-          if old not in s:
-              raise SystemExit('Could not find expected .bss section in Aurora linker script')
-          p.write_text(s.replace(old, new, 1))
-          PY
-
       - name: Build Cloudscape
         working-directory: AuroraCloudscape
-        run: make AURORA_SDK_PATH="$GITHUB_WORKSPACE/Aurora-SDK" LDSCRIPT="$GITHUB_WORKSPACE/AuroraCloudscape/cloudscape_sram.lds"
+        run: make AURORA_SDK_PATH="$GITHUB_WORKSPACE/Aurora-SDK"
 
       - name: Verify binary
         run: |
@@ -68,6 +41,6 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AuroraCloudscape-firmware
+          name: AuroraCloudscape-v1.2-native-firmware
           path: AuroraCloudscape/build/AuroraCloudscape.bin
           if-no-files-found: error
