@@ -1,0 +1,62 @@
+name: Build Aurora Super V2
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'AuroraSuperV2/**'
+      - '.github/workflows/super-v2.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi make git
+
+      - name: Clone Aurora SDK
+        run: |
+          git clone https://github.com/Qu-Bit-Electronix/Aurora-SDK --recurse-submodules Aurora-SDK
+          cd Aurora-SDK
+          git submodule update --init --recursive
+          ./ci/build_libs.sh
+
+      - name: Build seven V2 firmwares
+        working-directory: AuroraSuperV2
+        run: |
+          set -e
+          mkdir -p ../super_v2_artifacts
+          build_one () {
+            NAME="$1"
+            ENGINE="$2"
+            make clean AURORA_SDK_PATH="$GITHUB_WORKSPACE/Aurora-SDK" TARGET="$NAME" SUPER_ENGINE="$ENGINE" || true
+            make AURORA_SDK_PATH="$GITHUB_WORKSPACE/Aurora-SDK" TARGET="$NAME" SUPER_ENGINE="$ENGINE"
+            test -s "build/$NAME.bin"
+            cp "build/$NAME.bin" "../super_v2_artifacts/$NAME.bin"
+          }
+          build_one Aurora2OPFMV2   0
+          build_one AuroraROOMV2    1
+          build_one AuroraCHORUSV2  2
+          build_one AuroraTVCAV2    3
+          build_one AuroraEGV2      4
+          build_one AuroraSVFsV2    5
+          build_one AuroraSCANNERV2 6
+
+      - name: Verify binaries
+        run: |
+          ls -lh super_v2_artifacts/*.bin
+          sha256sum super_v2_artifacts/*.bin
+          for f in super_v2_artifacts/*.bin; do test -s "$f"; done
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aurora-Super-V2-seven-firmwares
+          path: super_v2_artifacts/*.bin
+          if-no-files-found: error
