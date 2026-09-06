@@ -1,6 +1,6 @@
-/* Aurora Beadscape v1.1 - Beads-inspired musical granular texture processor
+/* Aurora Beadscape v1.2 - Beads-inspired musical granular texture processor
    Independent Aurora-native implementation. No Mutable Instruments Beads code used.
-   v1.1: balanced Freeze level, gentler feedback, musical Scatter/Reverse/Lush gain staging. */
+   v1.2: stronger Reflect, brighter Lush reverb, richer wet path with Freeze compensation. */
 #include "aurora.h"
 #include "daisysp.h"
 #include <cmath>
@@ -119,13 +119,14 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     const float playback_ratio = reverse ? -reverse_ratio : pitch_ratio;
     const float phase_rate = (0.50f + 1.45f * density) / grain_samples;
 
-    // v1.1: gentler, more musical random motion.
+    // Controlled random motion.
     const float jitter_depth = (0.010f + 0.115f * density * density) * sample_rate;
     const float scatter_gain = scatter ? 1.45f : 1.0f;
 
-    // v1.1: Freeze now holds with slow decay instead of runaway regeneration.
-    const float fb = freeze ? 0.972f : (0.025f + 0.80f * feedback * feedback);
-    const float fb_smooth = 0.27f - 0.16f * size_ctl;
+    // v1.2 Reflect: earlier onset, stronger musical regeneration, still below Freeze.
+    const float reflect_curve = sqrtf(feedback);
+    const float fb = freeze ? 0.972f : (0.035f + 0.875f * reflect_curve);
+    const float fb_smooth = 0.28f - 0.15f * size_ctl;
 
     ui_position = position;
     ui_feedback = feedback;
@@ -151,17 +152,18 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 
     const float dry_gain = cosf(mix * kPi * 0.5f);
 
-    // Effects are level-compensated so toggling an effect changes colour, not volume.
+    // Richer overall wet path, with separate safety compensation for latched FX.
     float fx_trim = 1.0f;
-    if(freeze) fx_trim *= 0.72f;
-    if(reverse) fx_trim *= 0.94f;
-    if(lush) fx_trim *= 0.90f;
-    if(scatter) fx_trim *= 0.86f;
-    const float wet_gain = sinf(mix * kPi * 0.5f) * 0.98f * fx_trim;
+    if(freeze) fx_trim *= 0.66f;
+    if(reverse) fx_trim *= 0.96f;
+    if(lush) fx_trim *= 0.94f;
+    if(scatter) fx_trim *= 0.89f;
+    const float wet_gain = sinf(mix * kPi * 0.5f) * 1.12f * fx_trim;
 
-    const float verb_amount = lush ? 0.78f : (0.04f + 0.46f * size_ctl * size_ctl);
-    reverb.SetFeedback(lush ? 0.885f : (0.73f + 0.11f * size_ctl));
-    reverb.SetLpFreq(lush ? 12500.0f : (13500.0f - 5200.0f * size_ctl));
+    // Lush is now brighter and airier; normal Blur reverb remains warmer.
+    const float verb_amount = lush ? 0.90f : (0.045f + 0.50f * size_ctl * size_ctl);
+    reverb.SetFeedback(lush ? 0.905f : (0.735f + 0.115f * size_ctl));
+    reverb.SetLpFreq(lush ? 18200.0f : (14200.0f - 5000.0f * size_ctl));
 
     for(size_t i = 0; i < size; ++i)
     {
@@ -195,10 +197,13 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
             norm += window;
 
             grain_feedback_lp[g] += fb_smooth * (tap - grain_feedback_lp[g]);
-            const float fb_drive = 1.0f + feedback * 1.15f;
-            const float fb_signal = Saturate(grain_feedback_lp[g] * fb_drive);
+
+            // Reflect now adds both regeneration and a controlled harmonic bloom.
+            const float fb_drive = 1.0f + feedback * 2.10f;
+            const float coloured = grain_feedback_lp[g] + 0.16f * feedback * tap;
+            const float fb_signal = Saturate(coloured * fb_drive);
             const float write_in = freeze ? 0.0f : mono;
-            grain_line[g].Write(Bound(write_in * 0.82f + fb_signal * fb, 1.16f));
+            grain_line[g].Write(Bound(write_in * 0.84f + fb_signal * fb, 1.24f));
 
             grain_phase[g] += phase_rate * (1.0f + 0.045f * static_cast<float>(g));
             if(grain_phase[g] >= 1.0f)
@@ -214,21 +219,21 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 
         if(norm > 0.05f)
         {
-            const float scale = (1.00f + 0.28f * density) / norm;
+            // Slight wet lift as Atmosphere rises, without the v1.0 volume jump.
+            const float scale = (1.08f + 0.34f * density) / norm;
             wet_l *= scale;
             wet_r *= scale;
         }
 
-        // Musical smear: moderate stereo cross-spread instead of aggressive crossfeed.
-        const float cross = (0.04f + 0.22f * density) * size_ctl;
+        const float cross = (0.045f + 0.24f * density) * size_ctl;
         const float pre_l = wet_l;
         const float pre_r = wet_r;
         wet_l = Saturate(pre_l + pre_r * cross);
         wet_r = Saturate(pre_r - pre_l * cross * 0.62f);
 
         float rv_l = 0.0f, rv_r = 0.0f;
-        reverb.Process(Bound(wet_l * verb_amount, 0.68f), Bound(wet_r * verb_amount, 0.68f), &rv_l, &rv_r);
-        const float verb_return = lush ? 0.80f : 0.55f;
+        reverb.Process(Bound(wet_l * verb_amount, 0.74f), Bound(wet_r * verb_amount, 0.74f), &rv_l, &rv_r);
+        const float verb_return = lush ? 0.98f : 0.60f;
         wet_l = Saturate(wet_l + rv_l * verb_amount * verb_return);
         wet_r = Saturate(wet_r + rv_r * verb_amount * verb_return);
 
@@ -330,8 +335,8 @@ int main(void)
         grain_line[g].SetDelay(2400.0f + 300.0f * static_cast<float>(g));
     }
     reverb.Init(sample_rate);
-    reverb.SetFeedback(0.78f);
-    reverb.SetLpFreq(10500.0f);
+    reverb.SetFeedback(0.80f);
+    reverb.SetLpFreq(12000.0f);
     hw.StartAudio(AudioCallback);
     while(1)
     {
