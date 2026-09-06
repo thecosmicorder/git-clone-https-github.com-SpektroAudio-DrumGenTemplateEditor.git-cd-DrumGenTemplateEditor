@@ -12,3 +12,5 @@ LIBDAISY_DIR = $(AURORA_SDK_PATH)/libs/libDaisy/
 DAISYSP_DIR  = $(AURORA_SDK_PATH)/libs/DaisySP/
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
 include $(SYSTEM_FILES_DIR)/Makefile
+
+CPPFLAGS += -include AuroraCompat.h
