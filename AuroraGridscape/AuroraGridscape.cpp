@@ -89,6 +89,14 @@ inline float Clamp01(float x)
     return x;
 }
 
+inline float ClampRange(float x, float lo, float hi)
+{
+    if(!std::isfinite(x)) return lo;
+    if(x < lo) return lo;
+    if(x > hi) return hi;
+    return x;
+}
+
 inline float Saturate(float x)
 {
     if(!std::isfinite(x)) return 0.0f;
@@ -184,7 +192,6 @@ bool EuclidHit(uint8_t step, int length, int pulses)
     if(length <= 0 || pulses <= 0) return false;
     if(pulses >= length) return true;
     const int s = static_cast<int>(step) % length;
-    // Evenly distributed Euclidean-style pulse test.
     return ((s * pulses) % length) < pulses;
 }
 
@@ -306,7 +313,7 @@ void ProcessButtonsAndClock(size_t size)
         else
         {
             if(tap_elapsed > 0.20f && tap_elapsed < 1.60f)
-                bpm = fclamp(60.0f / tap_elapsed, 40.0f, 240.0f);
+                bpm = ClampRange(60.0f / tap_elapsed, 40.0f, 240.0f);
             tap_elapsed = 0.0f;
         }
     }
@@ -430,23 +437,23 @@ void UpdateLeds()
     const float f1 = Clamp01(ui_fill[1]);
     const float f2 = Clamp01(ui_fill[2]);
 
-    hw.SetLed(LED_1, 0.0f, 0.22f * x, 0.12f + 0.88f * x);             // X blue
-    hw.SetLed(LED_2, 0.12f + 0.88f * y, 0.04f * y, 0.0f);             // Y red
-    hw.SetLed(LED_3, c, c * 0.68f, 0.0f);                             // Chaos amber
-    hw.SetLed(LED_4, ui_hit[0], f0 * (0.18f + 0.82f * ui_hit[0]), 0.0f); // Kick orange/green
-    hw.SetLed(LED_5, 0.0f, f1 * (0.35f + 0.65f * ui_hit[1]), f1);     // Snare cyan
-    hw.SetLed(LED_6, f2, 0.0f, f2 * (0.35f + 0.65f * ui_hit[2]));     // Hat magenta
+    hw.SetLed(LED_1, 0.0f, 0.22f * x, 0.12f + 0.88f * x);
+    hw.SetLed(LED_2, 0.12f + 0.88f * y, 0.04f * y, 0.0f);
+    hw.SetLed(LED_3, c, c * 0.68f, 0.0f);
+    hw.SetLed(LED_4, ui_hit[0], f0 * (0.18f + 0.82f * ui_hit[0]), 0.0f);
+    hw.SetLed(LED_5, 0.0f, f1 * (0.35f + 0.65f * ui_hit[1]), f1);
+    hw.SetLed(LED_6, f2, 0.0f, f2 * (0.35f + 0.65f * ui_hit[2]));
 
     hw.SetLed(LED_BOT_1, ui_hit[0], 0.22f * ui_hit[0], 0.0f);
     hw.SetLed(LED_BOT_2, ui_hit[1], ui_hit[1], ui_hit[1]);
     hw.SetLed(LED_BOT_3, 0.45f * ui_hit[2], 0.0f, ui_hit[2]);
 
     if(ui_external)
-        hw.SetLed(LED_FREEZE, 0.0f, ui_beat, 0.10f * ui_beat); // external = green beat
+        hw.SetLed(LED_FREEZE, 0.0f, ui_beat, 0.10f * ui_beat);
     else if(ui_running)
-        hw.SetLed(LED_FREEZE, 0.0f, 0.18f * ui_beat, ui_beat); // internal = blue beat
+        hw.SetLed(LED_FREEZE, 0.0f, 0.18f * ui_beat, ui_beat);
     else
-        hw.SetLed(LED_FREEZE, 0.18f, 0.02f, 0.02f);            // stopped = dim red
+        hw.SetLed(LED_FREEZE, 0.18f, 0.02f, 0.02f);
 
     if(ui_euclidean)
     {
@@ -454,11 +461,11 @@ void UpdateLeds()
         hw.SetLed(LED_REVERSE, blink, blink, blink);
     }
     else if(ui_resolution == 0)
-        hw.SetLed(LED_REVERSE, 0.85f, 0.45f, 0.0f);            // 4ppqn amber
+        hw.SetLed(LED_REVERSE, 0.85f, 0.45f, 0.0f);
     else if(ui_resolution == 1)
-        hw.SetLed(LED_REVERSE, 0.0f, 0.85f, 0.85f);            // 8ppqn cyan
+        hw.SetLed(LED_REVERSE, 0.0f, 0.85f, 0.85f);
     else
-        hw.SetLed(LED_REVERSE, 0.85f, 0.0f, 0.85f);            // 24ppqn magenta
+        hw.SetLed(LED_REVERSE, 0.85f, 0.0f, 0.85f);
 
     hw.WriteLeds();
 }
