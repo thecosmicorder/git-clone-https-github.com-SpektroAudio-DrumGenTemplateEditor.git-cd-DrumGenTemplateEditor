@@ -1,11 +1,18 @@
 /*
- * Aurora Cloudscape v1.0
+ * Aurora Cloudscape v1.1 - SAFE MIX
  * Qu-Bit Aurora port using the open-source Mutable Instruments Clouds DSP
  * as maintained in Electrosmith DaisyExamples/Nimbus.
  *
  * Original Clouds DSP: Copyright 2014 Emilie Gillet, MIT License.
  * Nimbus Daisy port: Electrosmith contributors, MIT License.
  * Aurora hardware adaptation: 2026.
+ *
+ * v1.1 changes:
+ * - MIX=0 is a hard stereo dry passthrough and does not call Clouds DSP.
+ * - MIX is always the external Clouds effect level.
+ * - Clouds itself is rendered 100% wet.
+ * - Dry audio is never removed; wet Clouds audio is added as MIX rises.
+ * - Non-finite wet samples are rejected before they reach the output.
  *
  * This is an independent derivative firmware and is not an official
  * Mutable Instruments or Qu-Bit firmware release.
@@ -28,8 +35,10 @@ namespace
 constexpr size_t kCloudsBlockSize = 32;
 constexpr size_t kLargeMemSize = 118784;
 constexpr size_t kSmallMemSize = 65536 - 128;
+constexpr float kDryBypassThreshold = 0.005f;
+constexpr float kWetOutputGain = 0.80f;
 constexpr float kEditThreshold = 0.004f;
-constexpr uint32_t kEditHoldCallbacks = 1200; // ~0.8s at 48k/32
+constexpr uint32_t kEditHoldCallbacks = 1200;
 
 Hardware hw;
 D2RAM GranularProcessorClouds processor;
@@ -37,7 +46,9 @@ DSY_SDRAM_BSS uint8_t block_mem[kLargeMemSize];
 DTCMRAM uint8_t block_ccm[kSmallMemSize];
 Parameters* params = nullptr;
 
-int blend_target = 0;   // 0 dry/wet, 1 spread, 2 feedback, 3 reverb
+// SHIFT cycles which secondary Clouds parameter MIX edits.
+// MIX remains the audible effect level in every layer.
+int blend_target = 0;   // 0 effect level, 1 spread, 2 feedback, 3 reverb
 int playback_mode = 0;  // granular, stretch, looping delay, spectral
 bool freeze_latched = false;
 
@@ -49,7 +60,7 @@ volatile float ui_size = 0.5f;
 volatile float ui_density = 0.55f;
 volatile float ui_texture = 0.5f;
 volatile float ui_pitch_norm = 0.5f;
-volatile float ui_blend_value = 0.5f;
+volatile float ui_effect_mix = 0.0f;
 volatile int ui_edit_param = -1;
 volatile float ui_edit_value = 0.0f;
 volatile uint32_t ui_edit_hold = 0;
@@ -57,9 +68,16 @@ volatile uint32_t ui_edit_hold = 0;
 float last_knob[6] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
 bool knob_tracking_ready = false;
 
-struct Rgb { float r, g, b; };
+struct Rgb
+{
+    float r, g, b;
+};
 
-inline float Clamp01(float x) { return fclamp(x, 0.0f, 1.0f); }
+inline float Clamp01(float x)
+{
+    return fclamp(x, 0.0f, 1.0f);
+}
+
 inline float KnobCv(int knob, int cv)
 {
     return Clamp01(hw.GetKnobValue(knob) + hw.GetCvValue(cv));
@@ -67,7 +85,6 @@ inline float KnobCv(int knob, int cv)
 
 inline float PitchFrom01(float x)
 {
-    // Same response used by Electrosmith Nimbus: approximately +/-24 semitones.
     float p = 9.798f * (x - 0.5f);
     p *= p;
     return x < 0.5f ? -p : p;
@@ -77,11 +94,11 @@ Rgb ModeColor(int mode)
 {
     switch(mode)
     {
-        case 0: return {0.0f, 1.0f, 0.0f}; // granular: green
-        case 1: return {0.0f, 0.0f, 1.0f}; // stretch: blue
-        case 2: return {1.0f, 1.0f, 0.0f}; // looping delay: yellow
-        case 3: return {1.0f, 0.0f, 0.0f}; // spectral: red
-        default:return {0.3f, 0.3f, 0.3f};
+        case 0: return {0.0f, 1.0f, 0.0f}; // granular = green
+        case 1: return {0.0f, 0.0f, 1.0f}; // stretch = blue
+        case 2: return {1.0f, 1.0f, 0.0f}; // looping delay = yellow
+        case 3: return {1.0f, 0.0f, 0.0f}; // spectral = red
+        default: return {0.3f, 0.3f, 0.3f};
     }
 }
 
@@ -89,26 +106,25 @@ Rgb BlendColor(int target)
 {
     switch(target)
     {
-        case 0: return {1.0f, 1.0f, 0.0f}; // dry/wet: yellow
-        case 1: return {0.0f, 1.0f, 0.0f}; // spread: green
-        case 2: return {1.0f, 0.0f, 0.0f}; // feedback: red
-        case 3: return {0.0f, 0.0f, 1.0f}; // reverb: blue
-        default:return {0.4f, 0.4f, 0.4f};
+        case 0: return {1.0f, 1.0f, 0.0f}; // effect mix = yellow
+        case 1: return {0.0f, 1.0f, 0.0f}; // spread = green
+        case 2: return {1.0f, 0.0f, 0.0f}; // feedback = red
+        case 3: return {0.0f, 0.0f, 1.0f}; // reverb = blue
+        default: return {0.4f, 0.4f, 0.4f};
     }
 }
 
 Rgb EditColor(int param)
 {
-    // 0 position, 1 size, 2 blend, 3 density, 4 texture, 5 pitch
     switch(param)
     {
-        case 0: return {0.0f, 0.0f, 1.0f}; // position: blue
-        case 1: return {0.0f, 1.0f, 0.0f}; // size: green
-        case 2: return BlendColor(ui_blend_target);
-        case 3: return {1.0f, 1.0f, 0.0f}; // density: yellow
-        case 4: return {1.0f, 0.0f, 0.0f}; // texture: red
-        case 5: return {0.0f, 0.55f, 1.0f}; // pitch: blue/cyan
-        default:return {0.3f, 0.3f, 0.3f};
+        case 0: return {0.0f, 0.0f, 1.0f}; // position
+        case 1: return {0.0f, 1.0f, 0.0f}; // size
+        case 2: return BlendColor(ui_blend_target); // mix / selected blend layer
+        case 3: return {1.0f, 1.0f, 0.0f}; // density
+        case 4: return {1.0f, 0.0f, 0.0f}; // texture
+        case 5: return {0.0f, 0.55f, 1.0f}; // pitch
+        default: return {0.3f, 0.3f, 0.3f};
     }
 }
 
@@ -116,7 +132,8 @@ void TrackKnobEdits(const float raw[6], const float values[6])
 {
     if(!knob_tracking_ready)
     {
-        for(int i = 0; i < 6; ++i) last_knob[i] = raw[i];
+        for(int i = 0; i < 6; ++i)
+            last_knob[i] = raw[i];
         knob_tracking_ready = true;
         return;
     }
@@ -135,7 +152,8 @@ void TrackKnobEdits(const float raw[6], const float values[6])
 
     if(changed >= 0 && max_delta >= kEditThreshold)
     {
-        for(int i = 0; i < 6; ++i) last_knob[i] = raw[i];
+        for(int i = 0; i < 6; ++i)
+            last_knob[i] = raw[i];
         ui_edit_param = changed;
         ui_edit_value = Clamp01(values[changed]);
         ui_edit_hold = kEditHoldCallbacks;
@@ -164,12 +182,13 @@ void ProcessControls()
 
     const float position = KnobCv(KNOB_TIME, CV_TIME);
     const float size = KnobCv(KNOB_REFLECT, CV_REFLECT);
-    const float blend = KnobCv(KNOB_MIX, CV_MIX);
+    const float effect_mix = KnobCv(KNOB_MIX, CV_MIX);
     const float density = KnobCv(KNOB_ATMOSPHERE, CV_ATMOSPHERE);
     const float texture = KnobCv(KNOB_BLUR, CV_BLUR);
 
     const float pitch_knob = hw.GetKnobValue(KNOB_WARP);
-    const float pitch_semitones = fclamp(PitchFrom01(pitch_knob) + hw.GetWarpVoct(), -48.0f, 48.0f);
+    const float pitch_semitones =
+        fclamp(PitchFrom01(pitch_knob) + hw.GetWarpVoct(), -48.0f, 48.0f);
 
     params->position = position;
     params->size = size;
@@ -177,12 +196,18 @@ void ProcessControls()
     params->texture = texture;
     params->pitch = pitch_semitones;
 
+    // The processor is deliberately 100% wet. Aurora performs the audible
+    // dry/effect mix after Clouds has rendered, so Clouds can never mute dry.
+    params->dry_wet = 1.0f;
+
+    // Layer 0 leaves the secondary parameters unchanged. In layers 1-3 the
+    // MIX knob edits the selected Clouds blend parameter as well as effect level.
     switch(blend_target)
     {
-        case 0: params->dry_wet = blend; break;
-        case 1: params->stereo_spread = blend; break;
-        case 2: params->feedback = blend; break;
-        case 3: params->reverb = blend; break;
+        case 1: params->stereo_spread = effect_mix; break;
+        case 2: params->feedback = effect_mix; break;
+        case 3: params->reverb = effect_mix; break;
+        default: break;
     }
 
     const bool gate_freeze = hw.GetGateState(GATE_FREEZE);
@@ -196,9 +221,10 @@ void ProcessControls()
         hw.GetKnobValue(KNOB_MIX),
         hw.GetKnobValue(KNOB_ATMOSPHERE),
         hw.GetKnobValue(KNOB_BLUR),
-        hw.GetKnobValue(KNOB_WARP)
-    };
-    const float edit_values[6] = {position, size, blend, density, texture, pitch_knob};
+        hw.GetKnobValue(KNOB_WARP)};
+
+    const float edit_values[6] = {
+        position, size, effect_mix, density, texture, pitch_knob};
     TrackKnobEdits(raw, edit_values);
 
     ui_blend_target = blend_target;
@@ -209,36 +235,60 @@ void ProcessControls()
     ui_density = density;
     ui_texture = texture;
     ui_pitch_norm = pitch_knob;
-    ui_blend_value = blend;
+    ui_effect_mix = effect_mix;
 }
 
-void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)
+void AudioCallback(AudioHandle::InputBuffer in,
+                   AudioHandle::OutputBuffer out,
+                   size_t size)
 {
     ProcessControls();
 
+    const float mix = Clamp01(ui_effect_mix);
+
+    // Guaranteed hardware-style dry passthrough. At minimum MIX, Clouds is not
+    // even called, so DSP reset/mode-change states cannot mute the module.
+    if(mix <= kDryBypassThreshold)
+    {
+        for(size_t i = 0; i < size; ++i)
+        {
+            out[0][i] = in[0][i];
+            out[1][i] = in[1][i];
+        }
+        return;
+    }
+
     FloatFrame input[kCloudsBlockSize];
-    FloatFrame output[kCloudsBlockSize];
+    FloatFrame wet[kCloudsBlockSize];
     const size_t n = size > kCloudsBlockSize ? kCloudsBlockSize : size;
 
     for(size_t i = 0; i < n; ++i)
     {
         input[i].l = in[0][i];
         input[i].r = in[1][i];
-        output[i].l = 0.0f;
-        output[i].r = 0.0f;
+        wet[i].l = 0.0f;
+        wet[i].r = 0.0f;
     }
 
-    processor.Process(input, output, n);
+    processor.Process(input, wet, n);
 
+    const float wet_gain = kWetOutputGain * mix;
     for(size_t i = 0; i < n; ++i)
     {
-        out[0][i] = output[i].l;
-        out[1][i] = output[i].r;
+        float wl = wet[i].l;
+        float wr = wet[i].r;
+        if(!std::isfinite(wl)) wl = 0.0f;
+        if(!std::isfinite(wr)) wr = 0.0f;
+
+        // Send-style mix: the dry signal remains at unity while MIX adds Clouds.
+        out[0][i] = in[0][i] + wl * wet_gain;
+        out[1][i] = in[1][i] + wr * wet_gain;
     }
+
     for(size_t i = n; i < size; ++i)
     {
-        out[0][i] = 0.0f;
-        out[1][i] = 0.0f;
+        out[0][i] = in[0][i];
+        out[1][i] = in[1][i];
     }
 }
 
@@ -247,12 +297,17 @@ void DrawEditMeter()
     const float value = Clamp01(ui_edit_value);
     const Rgb c = EditColor(ui_edit_param);
     const float fill = value * 6.0f;
+
     for(int i = 0; i < 6; ++i)
     {
         float seg = Clamp01(fill - static_cast<float>(i));
-        if(i == 0) seg = fmaxf(seg, 0.18f);
+        if(i == 0)
+            seg = fmaxf(seg, 0.18f);
         const float bright = fclamp(0.18f + 0.82f * seg, 0.0f, 1.0f);
-        hw.SetLed(static_cast<Leds>(LED_1 + i), c.r * bright, c.g * bright, c.b * bright);
+        hw.SetLed(static_cast<Leds>(LED_1 + i),
+                  c.r * bright,
+                  c.g * bright,
+                  c.b * bright);
     }
 }
 
@@ -297,12 +352,19 @@ void UpdateLeds()
     {
         hw.SetLed(LED_1, 0.0f, 0.0f, 0.15f + 0.85f * ui_position);
         hw.SetLed(LED_2, 0.0f, 0.15f + 0.85f * ui_size, 0.0f);
-        hw.SetLed(LED_3, 0.15f + 0.85f * ui_density, 0.15f + 0.85f * ui_density, 0.0f);
+        hw.SetLed(LED_3,
+                  0.15f + 0.85f * ui_density,
+                  0.15f + 0.85f * ui_density,
+                  0.0f);
         hw.SetLed(LED_4, 0.15f + 0.85f * ui_texture, 0.0f, 0.0f);
-        hw.SetLed(LED_5, 0.0f, 0.25f + 0.75f * fabsf(ui_pitch_norm - 0.5f) * 2.0f, 1.0f);
-        const Rgb bc = BlendColor(ui_blend_target);
-        const float bv = 0.18f + 0.82f * ui_blend_value;
-        hw.SetLed(LED_6, bc.r * bv, bc.g * bv, bc.b * bv);
+        hw.SetLed(LED_5,
+                  0.0f,
+                  0.25f + 0.75f * fabsf(ui_pitch_norm - 0.5f) * 2.0f,
+                  1.0f);
+
+        const Rgb c = BlendColor(ui_blend_target);
+        const float b = 0.18f + 0.82f * ui_effect_mix;
+        hw.SetLed(LED_6, c.r * b, c.g * b, c.b * b);
     }
 
     DrawBlendTarget();
@@ -339,7 +401,7 @@ int main(void)
     params->pitch = 0.0f;
     params->density = 0.55f;
     params->texture = 0.5f;
-    params->dry_wet = 0.5f;
+    params->dry_wet = 1.0f;       // processor is always rendered wet-only
     params->stereo_spread = 0.5f;
     params->feedback = 0.20f;
     params->reverb = 0.25f;
