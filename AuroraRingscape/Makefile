@@ -2,14 +2,14 @@ TARGET = AuroraRingscape
 APP_TYPE = BOOT_SRAM
 
 CPP_SOURCES = AuroraRingscape.cpp \
-	vendor/rings/dsp/part.cc \
-	vendor/rings/dsp/resonator.cc \
-	vendor/rings/dsp/string.cc \
-	vendor/rings/dsp/fm_voice.cc \
-	vendor/rings/resources.cc \
-	vendor/stmlib/dsp/atan.cc \
-	vendor/stmlib/dsp/units.cc \
-	vendor/stmlib/utils/random.cc
+	part.cc \
+	resonator.cc \
+	string.cc \
+	fm_voice.cc \
+	resources.cc \
+	atan.cc \
+	units.cc \
+	random.cc
 
 AURORA_SDK_PATH ?= ../Aurora-SDK
 
