@@ -33,6 +33,14 @@ jobs:
           mkdir -p AuroraRingscape/vendor
           cp -R mutable-eurorack/rings AuroraRingscape/vendor/rings
           cp -R mutable-eurorack/stmlib AuroraRingscape/vendor/stmlib
+          cp mutable-eurorack/rings/dsp/part.cc AuroraRingscape/part.cc
+          cp mutable-eurorack/rings/dsp/resonator.cc AuroraRingscape/resonator.cc
+          cp mutable-eurorack/rings/dsp/string.cc AuroraRingscape/string.cc
+          cp mutable-eurorack/rings/dsp/fm_voice.cc AuroraRingscape/fm_voice.cc
+          cp mutable-eurorack/rings/resources.cc AuroraRingscape/resources.cc
+          cp mutable-eurorack/stmlib/dsp/atan.cc AuroraRingscape/atan.cc
+          cp mutable-eurorack/stmlib/dsp/units.cc AuroraRingscape/units.cc
+          cp mutable-eurorack/stmlib/utils/random.cc AuroraRingscape/random.cc
 
       - name: Build Ringscape
         working-directory: AuroraRingscape
