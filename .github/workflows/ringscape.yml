@@ -1,0 +1,53 @@
+name: Build Aurora Ringscape
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'AuroraRingscape/**'
+      - '.github/workflows/ringscape.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi make git
+
+      - name: Clone Aurora SDK
+        run: |
+          git clone https://github.com/Qu-Bit-Electronix/Aurora-SDK --recurse-submodules Aurora-SDK
+          cd Aurora-SDK
+          git submodule update --init --recursive
+          ./ci/build_libs.sh
+
+      - name: Fetch Mutable Rings source
+        run: |
+          git clone https://github.com/pichenettes/eurorack --recurse-submodules mutable-eurorack
+          mkdir -p AuroraRingscape/vendor
+          cp -R mutable-eurorack/rings AuroraRingscape/vendor/rings
+          cp -R mutable-eurorack/stmlib AuroraRingscape/vendor/stmlib
+
+      - name: Build Ringscape
+        working-directory: AuroraRingscape
+        run: make AURORA_SDK_PATH="$GITHUB_WORKSPACE/Aurora-SDK"
+
+      - name: Verify binary
+        run: |
+          test -s AuroraRingscape/build/AuroraRingscape.bin
+          file AuroraRingscape/build/AuroraRingscape.bin
+          ls -lh AuroraRingscape/build/AuroraRingscape.bin
+          sha256sum AuroraRingscape/build/AuroraRingscape.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuroraRingscape-v1.0
+          path: AuroraRingscape/build/AuroraRingscape.bin
+          if-no-files-found: error
