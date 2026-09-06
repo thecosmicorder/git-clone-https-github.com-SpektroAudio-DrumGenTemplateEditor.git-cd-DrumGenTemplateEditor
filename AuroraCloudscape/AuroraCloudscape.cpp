@@ -1,5 +1,5 @@
 /*
- * Aurora Cloudscape v1.3 - FOUR LATCHED FX
+ * Aurora Cloudscape v1.4 - FOUR LATCHED FX + BUTTON LED STATUS
  * Qu-Bit Aurora custom firmware using Aurora SDK + DaisySP.
  *
  * Core behaviour:
@@ -20,7 +20,12 @@
  *   SHIFT + FREEZE     latch lush reverb
  *   SHIFT + REVERSE    latch low-pass filter mode
  *
- * SHIFT combinations toggle their effects; they are not momentary.
+ * Button LED status:
+ *   FREEZE LED white       = Freeze
+ *   FREEZE LED blue        = Lush Reverb
+ *   REVERSE LED cyan       = Rotate / Ping-Pong
+ *   REVERSE LED yellow     = Filter
+ *   If both FX assigned to one button are active, that button alternates colors.
  */
 
 #include "aurora.h"
@@ -109,8 +114,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
 {
     hw.ProcessAllControls();
 
-    // SHIFT acts only as a modifier. The selected secondary effects latch and
-    // remain active after SHIFT is released.
     const bool shift_pressed = hw.GetButton(SW_SHIFT).Pressed();
 
     if(hw.GetButton(SW_FREEZE).RisingEdge())
@@ -129,8 +132,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
             rotate_latched = !rotate_latched;
     }
 
-    // External gates retain the original performance behaviour for the two
-    // primary effects without altering the stored latch states.
     const bool freeze = freeze_latched != hw.GetGateState(GATE_FREEZE);
     const bool rotate = rotate_latched != hw.GetGateState(GATE_REVERSE);
     const bool lush = lush_latched;
@@ -159,8 +160,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
     ui_filter = filter;
     ui_shift = shift_pressed;
 
-    // Absolute guarantee: at minimum MIX nothing in the effect engine can
-    // alter or mute the dry signal.
     if(mix <= kBypassThreshold)
     {
         for(size_t i = 0; i < size; ++i)
@@ -182,7 +181,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
                                  static_cast<float>(kMaxDelaySamples - 256));
     }
 
-    // WARP animates the delay taps and increases their stereo separation.
     const float mod_depth_samples = warp * warp * sample_rate * 0.022f;
     const float lfo_base_hz = 0.045f + warp * 0.40f;
     float phase_inc[kNumLines];
@@ -193,8 +191,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
         ? kFreezeFeedback
         : fmap(reflect, 0.0f, kMaxFeedback, Mapping::LINEAR);
 
-    // In FILTER mode BLUR becomes a tone control, so normal reverb is reduced
-    // unless LUSH is also latched. This makes the filter effect unmistakable.
     float reverb_amount = blur;
     if(filter && !lush)
         reverb_amount = 0.22f;
@@ -211,8 +207,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
     reverb.SetFeedback(verb_feedback);
     reverb.SetLpFreq(verb_lpf);
 
-    // BLUR is the filter darkness/cutoff control while FILTER is active.
-    // CCW is open/bright, clockwise becomes progressively darker.
     const float filter_cutoff = 350.0f
         + 11650.0f * (1.0f - blur) * (1.0f - blur);
     const float filter_alpha = fclamp(
@@ -261,7 +255,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
             cloud_r += tap[j] * pan_r * tap_gain;
         }
 
-        // ROTATE regenerates each active line from its neighbour.
         for(size_t j = 0; j < kNumLines; ++j)
         {
             const bool enabled = static_cast<int>(j) < active_lines;
@@ -293,7 +286,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
         float verb_r = 0.0f;
         if(reverb_amount > 0.001f)
         {
-            // LUSH gets a stronger, wider feed but remains bounded for stability.
             const float cloud_feed = lush ? 0.78f : 0.70f;
             const float live_feed = lush ? 0.24f : 0.18f;
             const float verb_in_l = Bound((cloud_l * cloud_feed + input_l * live_feed)
@@ -311,8 +303,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
         float wet_l = Saturate(cloud_l + verb_l * reverb_amount * reverb_return);
         float wet_r = Saturate(cloud_r + verb_r * reverb_amount * reverb_return);
 
-        // Three cascaded one-pole stages create a smooth, musical low-pass
-        // filter without introducing a new unstable feedback element.
         if(filter)
         {
             float fl = wet_l;
@@ -338,33 +328,31 @@ void UpdateLeds()
     hw.ClearLeds();
 
     // Six top LEDs mirror the six knob values.
-    hw.SetLed(LED_1, 0.0f, 0.0f, 0.12f + 0.88f * ui_time);                  // TIME blue
-    hw.SetLed(LED_2, 0.12f + 0.88f * ui_feedback, 0.0f, 0.0f);              // REFLECT red
-    hw.SetLed(LED_3, 0.12f + 0.88f * ui_mix, 0.12f + 0.88f * ui_mix, 0.0f); // MIX yellow
-    hw.SetLed(LED_4, 0.0f, 0.12f + 0.88f * ui_atmosphere, 0.0f);            // ATMOS green
+    hw.SetLed(LED_1, 0.0f, 0.0f, 0.12f + 0.88f * ui_time);
+    hw.SetLed(LED_2, 0.12f + 0.88f * ui_feedback, 0.0f, 0.0f);
+    hw.SetLed(LED_3, 0.12f + 0.88f * ui_mix, 0.12f + 0.88f * ui_mix, 0.0f);
+    hw.SetLed(LED_4, 0.0f, 0.12f + 0.88f * ui_atmosphere, 0.0f);
 
     if(ui_filter)
     {
-        // In filter mode BLUR is the cutoff/darkness control, shown yellow.
         const float b = 0.20f + 0.80f * ui_blur;
-        hw.SetLed(LED_5, b, b, 0.0f);
+        hw.SetLed(LED_5, b, b, 0.0f); // yellow = filter control
     }
     else
     {
         hw.SetLed(LED_5, 0.0f, 0.18f + 0.55f * ui_blur,
-                  0.18f + 0.82f * ui_blur);                                 // BLUR cyan
+                  0.18f + 0.82f * ui_blur); // cyan = blur
     }
 
     hw.SetLed(LED_6, 0.45f + 0.55f * ui_warp, 0.0f,
-              0.45f + 0.55f * ui_warp);                                     // WARP magenta
+              0.45f + 0.55f * ui_warp);
 
-    // Lower LEDs show secondary latched effects. With neither secondary mode
-    // active they revert to the number-of-cloud-lines display.
+    // Lower LEDs retain a second, very obvious indication of the SHIFT FX.
     if(ui_lush && ui_filter)
     {
-        hw.SetLed(LED_BOT_1, 0.0f, 0.0f, 1.0f); // blue = lush
-        hw.SetLed(LED_BOT_2, 1.0f, 1.0f, 0.0f); // yellow = filter
-        hw.SetLed(LED_BOT_3, 0.0f, 0.0f, 1.0f); // blue = lush
+        hw.SetLed(LED_BOT_1, 0.0f, 0.0f, 1.0f);
+        hw.SetLed(LED_BOT_2, 1.0f, 1.0f, 0.0f);
+        hw.SetLed(LED_BOT_3, 0.0f, 0.0f, 1.0f);
     }
     else if(ui_lush)
     {
@@ -387,15 +375,51 @@ void UpdateLeds()
         }
     }
 
-    // Primary latched effects keep their dedicated indicators.
-    hw.SetLed(LED_FREEZE,
-              ui_freeze ? 1.0f : 0.03f,
-              ui_freeze ? 1.0f : 0.03f,
-              ui_freeze ? 1.0f : 0.03f);                                    // white
-    hw.SetLed(LED_REVERSE,
-              ui_rotate ? 0.0f : 0.03f,
-              ui_rotate ? 1.0f : 0.03f,
-              ui_rotate ? 1.0f : 0.03f);                                    // cyan
+    // The physical FREEZE and REVERSE button LEDs now identify ALL four FX.
+    // When two FX share one button, alternate the two colors every ~240 ms.
+    static uint32_t led_ticks = 0;
+    ++led_ticks;
+    const bool alt = ((led_ticks / 20u) & 1u) != 0u;
+
+    if(ui_freeze && ui_lush)
+    {
+        if(alt)
+            hw.SetLed(LED_FREEZE, 1.0f, 1.0f, 1.0f); // Freeze = white
+        else
+            hw.SetLed(LED_FREEZE, 0.0f, 0.0f, 1.0f); // Lush = blue
+    }
+    else if(ui_lush)
+    {
+        hw.SetLed(LED_FREEZE, 0.0f, 0.0f, 1.0f);     // Lush = blue
+    }
+    else if(ui_freeze)
+    {
+        hw.SetLed(LED_FREEZE, 1.0f, 1.0f, 1.0f);     // Freeze = white
+    }
+    else
+    {
+        hw.SetLed(LED_FREEZE, 0.03f, 0.03f, 0.03f);
+    }
+
+    if(ui_rotate && ui_filter)
+    {
+        if(alt)
+            hw.SetLed(LED_REVERSE, 0.0f, 1.0f, 1.0f); // Rotate = cyan
+        else
+            hw.SetLed(LED_REVERSE, 1.0f, 1.0f, 0.0f); // Filter = yellow
+    }
+    else if(ui_filter)
+    {
+        hw.SetLed(LED_REVERSE, 1.0f, 1.0f, 0.0f);     // Filter = yellow
+    }
+    else if(ui_rotate)
+    {
+        hw.SetLed(LED_REVERSE, 0.0f, 1.0f, 1.0f);     // Rotate = cyan
+    }
+    else
+    {
+        hw.SetLed(LED_REVERSE, 0.03f, 0.03f, 0.03f);
+    }
 
     hw.WriteLeds();
 }
