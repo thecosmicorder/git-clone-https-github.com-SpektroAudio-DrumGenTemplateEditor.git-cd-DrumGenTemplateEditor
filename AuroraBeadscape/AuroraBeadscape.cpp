@@ -1,5 +1,6 @@
-/* Aurora Beadscape v1.0 - Beads-inspired dynamic granular texture processor
-   Independent Aurora-native implementation. No Mutable Instruments Beads code used. */
+/* Aurora Beadscape v1.1 - Beads-inspired musical granular texture processor
+   Independent Aurora-native implementation. No Mutable Instruments Beads code used.
+   v1.1: balanced Freeze level, gentler feedback, musical Scatter/Reverse/Lush gain staging. */
 #include "aurora.h"
 #include "daisysp.h"
 #include <cmath>
@@ -100,7 +101,6 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     const bool lush = lush_latched;
     const bool scatter = scatter_latched;
 
-    // Beads-style front panel mapping on Aurora.
     const float position = KnobCv(KNOB_TIME, CV_TIME);
     const float feedback = KnobCv(KNOB_REFLECT, CV_REFLECT);
     const float mix = KnobCv(KNOB_MIX, CV_MIX);
@@ -109,18 +109,23 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     const float pitch_ctl = Clamp01(hw.GetKnobValue(KNOB_WARP) + hw.GetWarpVoct() / 60.0f);
 
     const int active_grains = 2 + static_cast<int>(density * 4.999f);
-    const float grain_seconds = 0.018f * powf(22.0f, size_ctl); // ~18 ms to ~396 ms
-    const float grain_samples = fclamp(grain_seconds * sample_rate, 96.0f, 19000.0f);
-    const float base_delay = fclamp((0.018f + 2.25f * position * position) * sample_rate,
+    const float grain_seconds = 0.020f * powf(18.0f, size_ctl); // ~20 ms to ~360 ms
+    const float grain_samples = fclamp(grain_seconds * sample_rate, 96.0f, 17500.0f);
+    const float base_delay = fclamp((0.020f + 2.20f * position * position) * sample_rate,
                                     64.0f, static_cast<float>(kMaxDelaySamples - 2048));
     const float semitones = (pitch_ctl - 0.5f) * 48.0f;
     const float pitch_ratio = powf(2.0f, semitones / 12.0f);
-    const float playback_ratio = reverse ? -pitch_ratio : pitch_ratio;
-    const float phase_rate = (0.55f + 1.65f * density) / grain_samples;
-    const float jitter_depth = (0.015f + 0.22f * density * density) * sample_rate;
-    const float scatter_gain = scatter ? 2.35f : 1.0f;
-    const float fb = freeze ? 0.993f : (0.04f + 0.90f * feedback * feedback);
-    const float fb_smooth = 0.30f - 0.21f * size_ctl;
+    const float reverse_ratio = fclamp(pitch_ratio, 0.50f, 2.0f);
+    const float playback_ratio = reverse ? -reverse_ratio : pitch_ratio;
+    const float phase_rate = (0.50f + 1.45f * density) / grain_samples;
+
+    // v1.1: gentler, more musical random motion.
+    const float jitter_depth = (0.010f + 0.115f * density * density) * sample_rate;
+    const float scatter_gain = scatter ? 1.45f : 1.0f;
+
+    // v1.1: Freeze now holds with slow decay instead of runaway regeneration.
+    const float fb = freeze ? 0.972f : (0.025f + 0.80f * feedback * feedback);
+    const float fb_smooth = 0.27f - 0.16f * size_ctl;
 
     ui_position = position;
     ui_feedback = feedback;
@@ -145,16 +150,24 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     }
 
     const float dry_gain = cosf(mix * kPi * 0.5f);
-    const float wet_gain = sinf(mix * kPi * 0.5f) * 1.20f;
-    const float verb_amount = lush ? 0.95f : (0.06f + 0.62f * size_ctl * size_ctl);
-    reverb.SetFeedback(lush ? 0.93f : (0.76f + 0.13f * size_ctl));
-    reverb.SetLpFreq(lush ? 16000.0f : (14500.0f - 6500.0f * size_ctl));
+
+    // Effects are level-compensated so toggling an effect changes colour, not volume.
+    float fx_trim = 1.0f;
+    if(freeze) fx_trim *= 0.72f;
+    if(reverse) fx_trim *= 0.94f;
+    if(lush) fx_trim *= 0.90f;
+    if(scatter) fx_trim *= 0.86f;
+    const float wet_gain = sinf(mix * kPi * 0.5f) * 0.98f * fx_trim;
+
+    const float verb_amount = lush ? 0.78f : (0.04f + 0.46f * size_ctl * size_ctl);
+    reverb.SetFeedback(lush ? 0.885f : (0.73f + 0.11f * size_ctl));
+    reverb.SetLpFreq(lush ? 12500.0f : (13500.0f - 5200.0f * size_ctl));
 
     for(size_t i = 0; i < size; ++i)
     {
         const float input_l = Bound(in[0][i], 2.0f);
         const float input_r = Bound(in[1][i], 2.0f);
-        const float mono = Bound((input_l + input_r) * 0.5f, 1.6f);
+        const float mono = Bound((input_l + input_r) * 0.5f, 1.5f);
 
         float wet_l = 0.0f;
         float wet_r = 0.0f;
@@ -162,10 +175,10 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 
         for(int g = 0; g < active_grains; ++g)
         {
-            float p = grain_phase[g];
+            const float p = grain_phase[g];
             const float window = Hann(p);
             const float scan = (p - 0.5f) * (1.0f - playback_ratio) * grain_samples;
-            const float stereo_offset = (static_cast<float>(g) - 2.5f) * (35.0f + 140.0f * density);
+            const float stereo_offset = (static_cast<float>(g) - 2.5f) * (28.0f + 105.0f * density);
             float d = base_delay + grain_jitter[g] * scatter_gain + scan + stereo_offset;
             d = fclamp(d, 2.0f, static_cast<float>(kMaxDelaySamples - 4));
             grain_line[g].SetDelay(d);
@@ -173,7 +186,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 
             float pan = grain_pan[g];
             if(scatter)
-                pan = fclamp(0.5f + (pan - 0.5f) * 1.65f, 0.0f, 1.0f);
+                pan = fclamp(0.5f + (pan - 0.5f) * 1.28f, 0.08f, 0.92f);
             const float gl = sqrtf(fmaxf(0.0f, 1.0f - pan));
             const float gr = sqrtf(fmaxf(0.0f, pan));
             const float v = tap * window;
@@ -182,38 +195,42 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
             norm += window;
 
             grain_feedback_lp[g] += fb_smooth * (tap - grain_feedback_lp[g]);
-            const float fb_signal = Saturate(grain_feedback_lp[g] * (1.0f + feedback * 1.8f));
+            const float fb_drive = 1.0f + feedback * 1.15f;
+            const float fb_signal = Saturate(grain_feedback_lp[g] * fb_drive);
             const float write_in = freeze ? 0.0f : mono;
-            grain_line[g].Write(Bound(write_in * 0.88f + fb_signal * fb, 1.35f));
+            grain_line[g].Write(Bound(write_in * 0.82f + fb_signal * fb, 1.16f));
 
-            grain_phase[g] += phase_rate * (1.0f + 0.07f * static_cast<float>(g));
+            grain_phase[g] += phase_rate * (1.0f + 0.045f * static_cast<float>(g));
             if(grain_phase[g] >= 1.0f)
             {
                 grain_phase[g] -= 1.0f;
-                float r = Rand01() * 2.0f - 1.0f;
-                grain_jitter[g] = r * jitter_depth * (scatter ? 2.4f : 1.0f);
-                grain_pan[g] = scatter ? Rand01() : fclamp(0.12f + 0.15f * static_cast<float>(g), 0.0f, 1.0f);
+                const float r = Rand01() * 2.0f - 1.0f;
+                grain_jitter[g] = r * jitter_depth * (scatter ? 1.55f : 1.0f);
+                grain_pan[g] = scatter
+                    ? (0.12f + 0.76f * Rand01())
+                    : fclamp(0.15f + 0.14f * static_cast<float>(g), 0.0f, 1.0f);
             }
         }
 
         if(norm > 0.05f)
         {
-            const float scale = (1.35f + 0.55f * density) / norm;
+            const float scale = (1.00f + 0.28f * density) / norm;
             wet_l *= scale;
             wet_r *= scale;
         }
 
-        // Size acts as texture/smear; Atmosphere increases cross-spread.
-        const float cross = (0.06f + 0.34f * density) * size_ctl;
+        // Musical smear: moderate stereo cross-spread instead of aggressive crossfeed.
+        const float cross = (0.04f + 0.22f * density) * size_ctl;
         const float pre_l = wet_l;
         const float pre_r = wet_r;
         wet_l = Saturate(pre_l + pre_r * cross);
-        wet_r = Saturate(pre_r - pre_l * cross * 0.75f);
+        wet_r = Saturate(pre_r - pre_l * cross * 0.62f);
 
         float rv_l = 0.0f, rv_r = 0.0f;
-        reverb.Process(Bound(wet_l * verb_amount, 0.8f), Bound(wet_r * verb_amount, 0.8f), &rv_l, &rv_r);
-        wet_l = Saturate(wet_l + rv_l * verb_amount * (lush ? 1.12f : 0.72f));
-        wet_r = Saturate(wet_r + rv_r * verb_amount * (lush ? 1.12f : 0.72f));
+        reverb.Process(Bound(wet_l * verb_amount, 0.68f), Bound(wet_r * verb_amount, 0.68f), &rv_l, &rv_r);
+        const float verb_return = lush ? 0.80f : 0.55f;
+        wet_l = Saturate(wet_l + rv_l * verb_amount * verb_return);
+        wet_r = Saturate(wet_r + rv_r * verb_amount * verb_return);
 
         out[0][i] = Saturate(input_l * dry_gain + wet_l * wet_gain);
         out[1][i] = Saturate(input_r * dry_gain + wet_r * wet_gain);
@@ -246,12 +263,12 @@ void UpdateLeds()
     const float pitch_amount = fabsf(ui_pitch - 0.5f) * 2.0f;
     const float p6 = Pulse(pitch_amount, led_phase, 3.5f);
 
-    hw.SetLed(LED_1, 0.0f, 0.20f * p1, p1);          // Position blue
-    hw.SetLed(LED_2, p2, 0.0f, 0.0f);               // Feedback red
-    hw.SetLed(LED_3, p3, p3, 0.0f);                 // Mix yellow
-    hw.SetLed(LED_4, 0.0f, p4, 0.18f * p4);         // Density green
-    hw.SetLed(LED_5, 0.0f, 0.65f * p5, p5);         // Size cyan
-    hw.SetLed(LED_6, p6, 0.0f, p6);                 // Pitch magenta
+    hw.SetLed(LED_1, 0.0f, 0.20f * p1, p1);
+    hw.SetLed(LED_2, p2, 0.0f, 0.0f);
+    hw.SetLed(LED_3, p3, p3, 0.0f);
+    hw.SetLed(LED_4, 0.0f, p4, 0.18f * p4);
+    hw.SetLed(LED_5, 0.0f, 0.65f * p5, p5);
+    hw.SetLed(LED_6, p6, 0.0f, p6);
 
     if(ui_lush && ui_scatter)
     {
@@ -313,8 +330,8 @@ int main(void)
         grain_line[g].SetDelay(2400.0f + 300.0f * static_cast<float>(g));
     }
     reverb.Init(sample_rate);
-    reverb.SetFeedback(0.82f);
-    reverb.SetLpFreq(11000.0f);
+    reverb.SetFeedback(0.78f);
+    reverb.SetLpFreq(10500.0f);
     hw.StartAudio(AudioCallback);
     while(1)
     {
