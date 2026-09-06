@@ -37,6 +37,9 @@ jobs:
           cp DaisyExamples/patch/Nimbus/parameter_interpolator.h AuroraCloudscape/parameter_interpolator.h
           cp DaisyExamples/patch/Nimbus/shy_fft.h AuroraCloudscape/shy_fft.h
           cp DaisyExamples/patch/Nimbus/stmtemp.h AuroraCloudscape/stmtemp.h
+          # Aurora BOOT_SRAM leaves less DTCM headroom than Daisy Patch.
+          # Keep the Clouds fast work buffer in Aurora's large AXI/D2 memory pool.
+          sed -i 's/DTCMRAM uint8_t block_ccm/D2RAM uint8_t block_ccm/' AuroraCloudscape/AuroraCloudscape.cpp
 
       - name: Build Cloudscape
         working-directory: AuroraCloudscape
