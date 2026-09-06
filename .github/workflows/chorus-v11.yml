@@ -1,0 +1,46 @@
+name: Build Aurora CHORUS v1.1
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'AuroraCHORUSv11/**'
+      - '.github/workflows/chorus-v11.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi make git
+
+      - name: Clone Aurora SDK
+        run: |
+          git clone https://github.com/Qu-Bit-Electronix/Aurora-SDK --recurse-submodules Aurora-SDK
+          cd Aurora-SDK
+          git submodule update --init --recursive
+          ./ci/build_libs.sh
+
+      - name: Build CHORUS v1.1
+        working-directory: AuroraCHORUSv11
+        run: make AURORA_SDK_PATH="$GITHUB_WORKSPACE/Aurora-SDK"
+
+      - name: Verify binary
+        run: |
+          test -s AuroraCHORUSv11/build/AuroraCHORUSv11.bin
+          file AuroraCHORUSv11/build/AuroraCHORUSv11.bin
+          ls -lh AuroraCHORUSv11/build/AuroraCHORUSv11.bin
+          sha256sum AuroraCHORUSv11/build/AuroraCHORUSv11.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuroraCHORUS-v1.1-MULTI-DELAY
+          path: AuroraCHORUSv11/build/AuroraCHORUSv11.bin
+          if-no-files-found: error
