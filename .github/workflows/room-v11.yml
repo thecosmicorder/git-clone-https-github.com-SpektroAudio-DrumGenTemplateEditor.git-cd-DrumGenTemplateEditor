@@ -1,0 +1,46 @@
+name: Build Aurora ROOM v1.1
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'AuroraROOMv11/**'
+      - '.github/workflows/room-v11.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi make git
+
+      - name: Clone Aurora SDK
+        run: |
+          git clone https://github.com/Qu-Bit-Electronix/Aurora-SDK --recurse-submodules Aurora-SDK
+          cd Aurora-SDK
+          git submodule update --init --recursive
+          ./ci/build_libs.sh
+
+      - name: Build ROOM v1.1
+        working-directory: AuroraROOMv11
+        run: make AURORA_SDK_PATH="$GITHUB_WORKSPACE/Aurora-SDK"
+
+      - name: Verify binary
+        run: |
+          test -s AuroraROOMv11/build/AuroraROOMv11.bin
+          file AuroraROOMv11/build/AuroraROOMv11.bin
+          ls -lh AuroraROOMv11/build/AuroraROOMv11.bin
+          sha256sum AuroraROOMv11/build/AuroraROOMv11.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuroraROOM-v1.1-TIGHT-RICH
+          path: AuroraROOMv11/build/AuroraROOMv11.bin
+          if-no-files-found: error
