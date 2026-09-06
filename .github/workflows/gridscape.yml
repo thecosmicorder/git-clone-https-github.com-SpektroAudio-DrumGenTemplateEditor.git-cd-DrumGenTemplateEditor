@@ -1,0 +1,54 @@
+name: Build Aurora Gridscape
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'AuroraGridscape/**'
+      - '.github/workflows/gridscape.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi make git python3
+
+      - name: Clone Aurora SDK
+        run: |
+          git clone https://github.com/Qu-Bit-Electronix/Aurora-SDK --recurse-submodules Aurora-SDK
+          cd Aurora-SDK
+          git submodule update --init --recursive
+          ./ci/build_libs.sh
+
+      - name: Fetch Grids GPL rhythm-map resources
+        run: |
+          git clone https://github.com/pichenettes/eurorack.git MutableEurorack
+          cd MutableEurorack
+          git checkout 08460a69a7e1f7a81c5a2abcc7189c9a6b7208d4
+          cd ..
+          python3 AuroraGridscape/extract_grids_resources.py MutableEurorack/grids/resources.cc
+
+      - name: Build Gridscape
+        working-directory: AuroraGridscape
+        run: make AURORA_SDK_PATH="$GITHUB_WORKSPACE/Aurora-SDK"
+
+      - name: Verify binary
+        run: |
+          test -s AuroraGridscape/build/AuroraGridscape.bin
+          file AuroraGridscape/build/AuroraGridscape.bin
+          ls -lh AuroraGridscape/build/AuroraGridscape.bin
+          sha256sum AuroraGridscape/build/AuroraGridscape.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuroraGridscape-v1.0
+          path: AuroraGridscape/build/AuroraGridscape.bin
+          if-no-files-found: error
