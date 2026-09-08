@@ -11,14 +11,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Clone ELI2040 hardware
         run: git clone https://github.com/Emute-Lab-Instruments/ELI2040.git ELI2040
-      - name: Map header nets to RP2040 pads
+      - name: Find high-pad-count carrier footprints
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
           p=Path('ELI2040/ELI2040c/ELI2040c.kicad_pcb').read_text(errors='ignore')
           lines=p.splitlines()
-          def footprints():
+          def fps():
               for i,l in enumerate(lines):
                   if '(footprint ' not in l: continue
                   d=0; out=[]
@@ -26,14 +26,8 @@ jobs:
                       out.append(x); d += x.count('(')-x.count(')')
                       if d==0: break
                   yield i+1,'\n'.join(out)
-          for ln,b in footprints():
-              ref=re.search(r'\(property "Reference" "([^"]+)"',b)
-              val=re.search(r'\(property "Value" "([^"]+)"',b)
-              fp=re.search(r'^\s*\(footprint "([^"]+)"',b,re.M)
-              r=ref.group(1) if ref else '?'; v=val.group(1) if val else '?'; f=fp.group(1) if fp else '?'
-              if 'RP2040' not in v and 'RP2040' not in f and '1x35' not in f: continue
-              print('\nBLOCK',ln,'REF',r,'VAL',v,'FP',f)
-              bl=b.splitlines()
+          for ln,b in fps():
+              pads=[]; bl=b.splitlines()
               for j,x in enumerate(bl):
                   m=re.match(r'\s*\(pad "?([^" ]+)"?',x)
                   if not m: continue
@@ -41,7 +35,12 @@ jobs:
                   for y in bl[j:]:
                       chunk.append(y); d += y.count('(')-y.count(')')
                       if d==0: break
-                  t=' '.join(chunk)
-                  nm=re.search(r'\(net\s+\d+\s+"([^"]*)"\)',t)
-                  if nm: print('PAD',pad,'NET',nm.group(1))
+                  t=' '.join(chunk); nm=re.search(r'\(net\s+\d+\s+"([^"]*)"\)',t)
+                  if nm: pads.append((pad,nm.group(1)))
+              if len(pads) < 30: continue
+              ref=re.search(r'\(property "Reference" "([^"]+)"',b)
+              val=re.search(r'\(property "Value" "([^"]+)"',b)
+              fp=re.search(r'^\s*\(footprint "([^"]+)"',b,re.M)
+              print('\nBLOCK',ln,'REF',ref.group(1) if ref else '?','VAL',val.group(1) if val else '?','FP',fp.group(1) if fp else '?','PADCOUNT',len(pads))
+              for pad,net in pads: print('PAD',pad,'NET',net)
           PY
