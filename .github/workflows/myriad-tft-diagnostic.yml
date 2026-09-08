@@ -1,0 +1,25 @@
+name: Diagnose Myriad TFT Wiring
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-tft-diagnostic.yml' ]
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone Myriad 1.1.2
+        run: git clone --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+      - name: Show hardware display references
+        run: |
+          echo '=== source display refs ==='
+          grep -RniE 'GC9A01|TFT_|DISPLAY|LCD|MOSI|SCLK|SPI' Myriad/Myriad_A Myriad/readme.md 2>/dev/null | head -n 250 || true
+          echo '=== schematic labels ==='
+          grep -niE 'GC9A01|TFT|DISPLAY|LCD|MOSI|SCLK|SCK|CS|DC|RST' Myriad/hardware/myriad_0.5.kicad_sch 2>/dev/null | head -n 400 || true
+          echo '=== pcb nets/footprints ==='
+          grep -niE 'GC9A01|TFT|DISPLAY|LCD|MOSI|SCLK|SCK|CS|DC|RST' Myriad/hardware/myriad_0.5.kicad_pcb 2>/dev/null | head -n 500 || true
+          echo '=== hardware files ==='
+          find Myriad/hardware -maxdepth 2 -type f | sort | head -n 100
