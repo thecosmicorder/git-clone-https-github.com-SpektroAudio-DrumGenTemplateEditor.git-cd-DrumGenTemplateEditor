@@ -1,0 +1,113 @@
+name: Build Myriad SAFE4 A
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths:
+      - 'myriad-safe4/**'
+      - '.github/workflows/myriad-safe4-a.yml'
+  workflow_dispatch:
+
+jobs:
+  build-a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout build helper
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install Raspberry Pi Pico core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@6.0.0
+
+      - name: Clone exact Myriad 1.1.2 source and submodules
+        run: |
+          git clone --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+          cd Myriad
+          git submodule update --init --recursive
+          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
+          test "$(git -C Myriad_A/src/memlp rev-parse HEAD)" = 'b5a63e8f70b22c0fcdcc4175ba8447ef91512d21'
+
+      - name: Repair official memlp HARDSIGMOID mismatch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('Myriad/Myriad_A/src/memlp/Utils.h')
+          s=p.read_text()
+          assert 'enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};' in s
+          s=s.replace('enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};',
+                      'enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU, HARDSIGMOID};')
+          marker='''//Compute hyperbolic tangent (tanh)\n'''
+          assert marker in s
+          hard='''// Hard sigmoid required by Myriad 1.1.2 metaOscs\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T hardsigmoid(T x) {\n  T y = static_cast<T>(0.2) * x + static_cast<T>(0.5);\n  if (y < static_cast<T>(0)) return static_cast<T>(0);\n  if (y > static_cast<T>(1)) return static_cast<T>(1);\n  return y;\n}\n\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T deriv_hardsigmoid(T x) {\n  return (x > static_cast<T>(-2.5) && x < static_cast<T>(2.5)) ? static_cast<T>(0.2) : static_cast<T>(0);\n}\n\n'''
+          s=s.replace(marker,hard+marker)
+          reg='''    AddNewPair(ACTIVATION_FUNCTIONS::RELU, &relu<T>, &deriv_relu<T>);'''
+          assert reg in s
+          s=s.replace(reg,reg+'\n    AddNewPair(ACTIVATION_FUNCTIONS::HARDSIGMOID, &hardsigmoid<T>, &deriv_hardsigmoid<T>);')
+          p.write_text(s)
+          PY
+          grep -q 'HARDSIGMOID' Myriad/Myriad_A/src/memlp/Utils.h
+
+      - name: Apply SAFE4 source patch
+        run: |
+          python3 myriad-safe4/prepare_safe4.py
+          grep -q 'N_OSCILLATOR_MODELS = 17;' Myriad/arduino_libmyriad/oscillatorModels.hpp
+          grep -q 'allOscModels\[16\]' Myriad/Myriad_A/Myriad_A.ino
+          grep -q 'MYRIAD_VERSION "1.1.2-SAFE4"' Myriad/Myriad_A/Myriad_A.ino
+
+      - name: Install ArduinoJson
+        run: |
+          arduino-cli lib install 'ArduinoJson@6.21.5'
+
+      - name: Install exact historical Myriad TFT setup
+        run: |
+          git clone https://github.com/Emute-Lab-Instruments/TFT_eSPI.git TFT_eSPI
+          cd TFT_eSPI
+          SETUP_PATH='User_Setups/Setup303_RP2040_GC9A01.h'
+          SETUP_COMMIT="$(git log --all --format=%H -- "$SETUP_PATH" | head -n 1)"
+          test -n "$SETUP_COMMIT"
+          echo "$SETUP_COMMIT" | tee ../tft_setup_commit.txt
+          git show "$SETUP_COMMIT:$SETUP_PATH" > "$SETUP_PATH"
+          test -s "$SETUP_PATH"
+          printf '#pragma once\n#include <User_Setups/Setup303_RP2040_GC9A01.h>\n' > User_Setup_Select.h
+          echo '--- Exact recovered Setup303 ---'
+          cat "$SETUP_PATH"
+
+      - name: Install shared Arduino libraries
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          ln -s "$GITHUB_WORKSPACE/Myriad/arduino_libmyriad" "$HOME/Arduino/libraries/arduino_libmyriad"
+          ln -s "$GITHUB_WORKSPACE/TFT_eSPI" "$HOME/Arduino/libraries/TFT_eSPI"
+
+      - name: Compile Myriad A for Raspberry Pi Pico
+        run: |
+          mkdir -p build-A
+          arduino-cli compile --fqbn rp2040:rp2040:rpipico --output-dir "$GITHUB_WORKSPACE/build-A" Myriad/Myriad_A 2>&1 | tee build-A/compile.log
+          test -s build-A/Myriad_A.ino.uf2
+
+      - name: Validate UF2 and capture build metadata
+        run: |
+          cp build-A/Myriad_A.ino.uf2 build-A/Myriad_A_SAFE4.uf2
+          cp tft_setup_commit.txt build-A/TFT_SETUP_COMMIT.txt
+          cp TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h build-A/Setup303_RP2040_GC9A01.h
+          ls -lh build-A/Myriad_A_SAFE4.uf2
+          sha256sum build-A/Myriad_A_SAFE4.uf2 | tee build-A/SHA256.txt
+          grep -E 'Sketch uses|Global variables use' build-A/compile.log | tee build-A/MEMORY.txt || true
+
+      - name: Upload A firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-SAFE4-A
+          path: |
+            build-A/Myriad_A_SAFE4.uf2
+            build-A/SHA256.txt
+            build-A/MEMORY.txt
+            build-A/TFT_SETUP_COMMIT.txt
+            build-A/Setup303_RP2040_GC9A01.h
+            build-A/compile.log
+          if-no-files-found: error
