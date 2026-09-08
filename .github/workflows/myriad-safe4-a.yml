@@ -25,13 +25,14 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install rp2040:rp2040@6.0.0
 
-      - name: Clone exact Myriad 1.1.2 source and submodules
+      - name: Clone exact Myriad 1.1.2 source and exact memlp commit
         run: |
           git clone --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
-          cd Myriad
-          git submodule update --init --recursive
-          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
-          test "$(git -C Myriad_A/src/memlp rev-parse HEAD)" = 'b5a63e8f70b22c0fcdcc4175ba8447ef91512d21'
+          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad/Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
+          rm -rf Myriad/Myriad_A/src/memlp
+          git clone https://github.com/MusicallyEmbodiedML/memlp.git Myriad/Myriad_A/src/memlp
+          git -C Myriad/Myriad_A/src/memlp checkout b5a63e8f70b22c0fcdcc4175ba8447ef91512d21
+          test "$(git -C Myriad/Myriad_A/src/memlp rev-parse HEAD)" = 'b5a63e8f70b22c0fcdcc4175ba8447ef91512d21'
 
       - name: Repair official memlp HARDSIGMOID mismatch
         run: |
