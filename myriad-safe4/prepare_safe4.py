@@ -34,43 +34,75 @@ __TABLES__
 class safe4BaseOscillatorModel : public virtual oscillatorModel {
 public:
   safe4BaseOscillatorModel() : oscillatorModel() {
-    loopLength=16; prog=bitbybit_program; updateBufferInSyncWithDMA=true; setClockModShift(1);
+    loopLength=16;
+    prog=bitbybit_program;
+    updateBufferInSyncWithDMA=true;
   }
   pio_sm_config getBaseConfig(uint offset) override { return bitbybit_program_get_default_config(offset); }
   void reset() override { phase=0; err=0; }
 protected:
-  uint32_t phase=0; int32_t err=0;
+  uint32_t phase=0;
+  int32_t err=0;
+  inline uint32_t safeInc() const {
+    const uint32_t wl = wavelen > 0 ? static_cast<uint32_t>(wavelen) : 1U;
+    return (256U<<16)/wl;
+  }
   inline int32_t peak() const {
     constexpr int32_t REF=1<<11;
     return static_cast<int32_t>((static_cast<int64_t>(REF)*fadeInvTable[fadeLevel])>>16);
   }
   inline void emit(uint32_t* out,const uint16_t* tab,uint32_t inc) {
-    uint32_t ph=phase; int32_t er=err; const int32_t pk=peak();
-    for(size_t i=0;i<loopLength;i++) { uint32_t word=0;
-      for(size_t bit=0;bit<32;bit++) { uint32_t idx=(ph>>16)&0xFF; int32_t amp=tab[idx];
-        int32_t y=amp>=er?1:0; er=er-amp+y*pk; word=(word<<1)|static_cast<uint32_t>(y); ph+=inc; }
-      out[i]=word; }
-    phase=ph; err=er; updateFade();
+    uint32_t ph=phase;
+    int32_t er=err;
+    const int32_t pk=peak();
+    for(size_t i=0;i<loopLength;i++) {
+      uint32_t word=0;
+      for(size_t bit=0;bit<32;bit++) {
+        const uint32_t idx=(ph>>16)&0xFF;
+        const int32_t amp=tab[idx];
+        const int32_t y=amp>=er?1:0;
+        er=(y ? pk : 0)-amp+er;
+        word|=static_cast<uint32_t>(y);
+        word<<=1;
+        ph+=inc;
+      }
+      out[i]=word;
+    }
+    phase=ph;
+    err=er;
+    updateFade();
   }
 };
 
 class safe4PureSineModel : public safe4BaseOscillatorModel {
 public:
-  void fillBuffer(uint32_t* out) override { emit(out,Safe4Tables::sine256,(256U<<16)/static_cast<uint32_t>(wavelen)); }
+  void fillBuffer(uint32_t* out) override { emit(out,Safe4Tables::sine256,safeInc()); }
   String getIdentifier() override { return "A_sine"; }
 };
 
 class safe4WavefolderModel : public safe4BaseOscillatorModel {
 public:
-  void ctrl(const Q16_16 v) override { fold=static_cast<int32_t>((static_cast<int64_t>(v.raw())*3)>>16); }
+  void ctrl(const Q16_16 v) override {
+    int32_t r=v.raw(); if(r<0) r=0; if(r>65535) r=65535;
+    fold=static_cast<int32_t>((static_cast<int64_t>(r)*3)>>16);
+  }
   void fillBuffer(uint32_t* out) override {
-    const uint32_t inc=(256U<<16)/static_cast<uint32_t>(wavelen); uint32_t ph=phase; int32_t er=err;
+    const uint32_t inc=safeInc();
+    uint32_t ph=phase; int32_t er=err;
     const int32_t pk=peak(), gain=1+fold;
-    for(size_t i=0;i<loopLength;i++){ uint32_t word=0;
-      for(size_t bit=0;bit<32;bit++){ uint32_t idx=(ph>>16)&0xFF; int32_t x=(int32_t)Safe4Tables::sine256[idx]-1024; x*=gain;
+    for(size_t i=0;i<loopLength;i++){
+      uint32_t word=0;
+      for(size_t bit=0;bit<32;bit++){
+        const uint32_t idx=(ph>>16)&0xFF;
+        int32_t x=(int32_t)Safe4Tables::sine256[idx]-1024;
+        x*=gain;
         while(x>1024||x<-1024){ if(x>1024)x=2048-x; if(x<-1024)x=-2048-x; }
-        int32_t amp=x+1024,y=amp>=er?1:0; er=er-amp+y*pk; word=(word<<1)|(uint32_t)y; ph+=inc; }
-      out[i]=word; }
+        const int32_t amp=x+1024, y=amp>=er?1:0;
+        er=(y ? pk : 0)-amp+er;
+        word|=(uint32_t)y; word<<=1; ph+=inc;
+      }
+      out[i]=word;
+    }
     phase=ph; err=er; updateFade();
   }
   String getIdentifier() override { return "B_fold"; }
@@ -79,14 +111,26 @@ private: int32_t fold=0;
 
 class safe4FMMorphModel : public safe4BaseOscillatorModel {
 public:
-  void ctrl(const Q16_16 v) override { depth=static_cast<int32_t>((static_cast<int64_t>(v.raw())*72)>>16); }
+  void ctrl(const Q16_16 v) override {
+    int32_t r=v.raw(); if(r<0) r=0; if(r>65535) r=65535;
+    depth=static_cast<int32_t>((static_cast<int64_t>(r)*72)>>16);
+  }
   void fillBuffer(uint32_t* out) override {
-    const uint32_t inc=(256U<<16)/static_cast<uint32_t>(wavelen); uint32_t ph=phase; int32_t er=err; const int32_t pk=peak(),d=depth;
-    for(size_t i=0;i<loopLength;i++){ uint32_t word=0;
-      for(size_t bit=0;bit<32;bit++){ uint32_t base=(ph>>16)&0xFF, mi=(ph>>15)&0xFF; int32_t mod=(int32_t)Safe4Tables::sine256[mi]-1024;
-        uint32_t ci=(base+((mod*d)>>10))&0xFF; int32_t amp=Safe4Tables::sine256[ci],y=amp>=er?1:0;
-        er=er-amp+y*pk; word=(word<<1)|(uint32_t)y; ph+=inc; }
-      out[i]=word; }
+    const uint32_t inc=safeInc();
+    uint32_t ph=phase; int32_t er=err;
+    const int32_t pk=peak(),d=depth;
+    for(size_t i=0;i<loopLength;i++){
+      uint32_t word=0;
+      for(size_t bit=0;bit<32;bit++){
+        const uint32_t base=(ph>>16)&0xFF, mi=(ph>>15)&0xFF;
+        const int32_t mod=(int32_t)Safe4Tables::sine256[mi]-1024;
+        const uint32_t ci=(base+((mod*d)>>10))&0xFF;
+        const int32_t amp=Safe4Tables::sine256[ci], y=amp>=er?1:0;
+        er=(y ? pk : 0)-amp+er;
+        word|=(uint32_t)y; word<<=1; ph+=inc;
+      }
+      out[i]=word;
+    }
     phase=ph; err=er; updateFade();
   }
   String getIdentifier() override { return "C_fm"; }
@@ -96,16 +140,27 @@ private: int32_t depth=0;
 class safe4VowelMorphModel : public safe4BaseOscillatorModel {
 public:
   void ctrl(const Q16_16 v) override {
-    uint32_t scaled=(uint32_t)(((uint64_t)(uint32_t)v.raw()*4096U)>>16); if(scaled>4095U)scaled=4095U; seg=scaled>>10; morph=scaled&1023;
+    int32_t r=v.raw(); if(r<0) r=0; if(r>65535) r=65535;
+    uint32_t scaled=(uint32_t)(((uint64_t)(uint32_t)r*4096U)>>16);
+    if(scaled>4095U)scaled=4095U;
+    seg=scaled>>10; morph=scaled&1023;
   }
   void fillBuffer(uint32_t* out) override {
     static const uint16_t* const tabs[5]={Safe4Tables::vowel0,Safe4Tables::vowel1,Safe4Tables::vowel2,Safe4Tables::vowel3,Safe4Tables::vowel4};
-    const uint32_t inc=(256U<<16)/static_cast<uint32_t>(wavelen); uint32_t ph=phase; int32_t er=err; const int32_t pk=peak(),m=morph;
+    const uint32_t inc=safeInc();
+    uint32_t ph=phase; int32_t er=err;
+    const int32_t pk=peak(),m=morph;
     const uint16_t* a=tabs[seg]; const uint16_t* b=tabs[seg+1];
-    for(size_t i=0;i<loopLength;i++){ uint32_t word=0;
-      for(size_t bit=0;bit<32;bit++){ uint32_t idx=(ph>>16)&0xFF; int32_t av=a[idx],bv=b[idx],amp=av+(((bv-av)*m)>>10),y=amp>=er?1:0;
-        er=er-amp+y*pk; word=(word<<1)|(uint32_t)y; ph+=inc; }
-      out[i]=word; }
+    for(size_t i=0;i<loopLength;i++){
+      uint32_t word=0;
+      for(size_t bit=0;bit<32;bit++){
+        const uint32_t idx=(ph>>16)&0xFF;
+        const int32_t av=a[idx],bv=b[idx],amp=av+(((bv-av)*m)>>10),y=amp>=er?1:0;
+        er=(y ? pk : 0)-amp+er;
+        word|=(uint32_t)y; word<<=1; ph+=inc;
+      }
+      out[i]=word;
+    }
     phase=ph; err=er; updateFade();
   }
   String getIdentifier() override { return "D_vowel"; }
@@ -115,7 +170,9 @@ private: uint32_t seg=0; int32_t morph=0;
 (ROOT/'arduino_libmyriad'/'oscmodels'/'safe4OscillatorModels.hpp').write_text(header)
 
 osc=ROOT/'arduino_libmyriad'/'oscillatorModels.hpp'
-s=osc.read_text(); assert 'N_OSCILLATOR_MODELS = 13;' in s; assert 'safe4OscillatorModels.hpp' not in s
+s=osc.read_text()
+assert 'N_OSCILLATOR_MODELS = 13;' in s
+assert 'safe4OscillatorModels.hpp' not in s
 s=s.replace('N_OSCILLATOR_MODELS = 13;','N_OSCILLATOR_MODELS = 17;')
 s=s.replace('#include "oscmodels/triTeethOscillatorModel.hpp"','#include "oscmodels/triTeethOscillatorModel.hpp"\n#include "oscmodels/safe4OscillatorModels.hpp"')
 osc.write_text(s)
@@ -143,4 +200,6 @@ assert 'N_OSCILLATOR_MODELS = 17;' in osc.read_text()
 assert 'allOscModels0[16][i]' in b.read_text() and 'allOscModels1[16][i]' in b.read_text()
 assert 'allOscModels[16][i]' in a.read_text()
 assert 'oscBankTypes[i] < 13 ? oscBankTypes[i] : 0' in a.read_text()
+assert 'setClockModShift' not in header
+assert 'wavelen > 0' in header
 print('SAFE4 source generation and 1.1.2 structural validation: PASS')
