@@ -9,40 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Clone ELI2040 hardware
-        run: git clone https://github.com/Emute-Lab-Instruments/ELI2040.git ELI2040
-      - name: List likely carrier connector footprints
+      - name: Download official Myriad Arduino settings screenshot
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p=Path('ELI2040/ELI2040c/ELI2040c.kicad_pcb').read_text(errors='ignore')
-          lines=p.splitlines()
-          def fps():
-              for i,l in enumerate(lines):
-                  if '(footprint ' not in l: continue
-                  d=0; out=[]
-                  for x in lines[i:]:
-                      out.append(x); d += x.count('(')-x.count(')')
-                      if d==0: break
-                  yield i+1,'\n'.join(out)
-          for ln,b in fps():
-              pads=[]; bl=b.splitlines()
-              for j,x in enumerate(bl):
-                  m=re.match(r'\s*\(pad "?([^" ]+)"?',x)
-                  if not m: continue
-                  pad=m.group(1); d=0; chunk=[]
-                  for y in bl[j:]:
-                      chunk.append(y); d += y.count('(')-y.count(')')
-                      if d==0: break
-                  t=' '.join(chunk)
-                  nm=re.search(r'\(net\s+\d+\s+"([^"]*)"\)',t)
-                  at=re.search(r'\(at\s+([^\)]+)\)',x)
-                  pads.append((pad,nm.group(1) if nm else '',at.group(1) if at else '?'))
-              if len(pads) < 10: continue
-              ref=re.search(r'\(property "Reference" "([^"]+)"',b)
-              val=re.search(r'\(property "Value" "([^"]+)"',b)
-              fp=re.search(r'^\s*\(footprint "([^"]+)"',b,re.M)
-              print('\nBLOCK',ln,'REF',ref.group(1) if ref else '?','VAL',val.group(1) if val else '?','FP',fp.group(1) if fp else '?','PADCOUNT',len(pads))
-              for pad,net,at in pads: print('PAD',pad,'NET',net,'AT',at)
-          PY
+          curl -L --fail --retry 3 -o myriad_arduino_settings.png 'https://github.com/user-attachments/assets/81c5da8a-f282-4116-b620-a2a86a6cb852'
+          file myriad_arduino_settings.png
+          ls -lh myriad_arduino_settings.png
+      - name: Upload settings screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-official-Arduino-settings
+          path: myriad_arduino_settings.png
+          if-no-files-found: error
