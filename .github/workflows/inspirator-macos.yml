@@ -1,0 +1,55 @@
+name: InspiratoR macOS VST3 AU
+
+on:
+  push:
+    branches: [ inspirator-native-build ]
+    paths:
+      - 'InspiratoR_Native/**'
+      - '.github/workflows/inspirator-macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos-plugins:
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Configure Universal Release
+        run: cmake -S InspiratoR_Native -B build-inspirator -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build engine smoke test, VST3 and AU
+        run: cmake --build build-inspirator --config Release --target InspiratoEngineSmoke InspiratoR_VST3 InspiratoR_AU --parallel
+
+      - name: Run v3.11 engine regression suite
+        run: ./build-inspirator/Release/InspiratoEngineSmoke
+
+      - name: Verify universal plugin binaries
+        run: |
+          VSTBIN="build-inspirator/InspiratoR_artefacts/Release/VST3/InspiratoR.vst3/Contents/MacOS/InspiratoR"
+          AUBIN="build-inspirator/InspiratoR_artefacts/Release/AU/InspiratoR.component/Contents/MacOS/InspiratoR"
+          lipo -info "$VSTBIN"
+          lipo -info "$AUBIN"
+          lipo -verify_arch x86_64 arm64 "$VSTBIN"
+          lipo -verify_arch x86_64 arm64 "$AUBIN"
+
+      - name: Stage macOS plugins
+        run: |
+          mkdir -p dist/macOS
+          ditto "build-inspirator/InspiratoR_artefacts/Release/VST3/InspiratoR.vst3" "dist/macOS/InspiratoR.vst3"
+          ditto "build-inspirator/InspiratoR_artefacts/Release/AU/InspiratoR.component" "dist/macOS/InspiratoR.component"
+
+      - name: Upload macOS Universal VST3 and AU
+        uses: actions/upload-artifact@v4
+        with:
+          name: InspiratoR-macOS-Universal-VST3-AU
+          path: |
+            dist/macOS/InspiratoR.vst3
+            dist/macOS/InspiratoR.component
+          if-no-files-found: error
+          retention-days: 30
