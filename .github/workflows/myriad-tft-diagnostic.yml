@@ -13,34 +13,39 @@ jobs:
       - uses: actions/checkout@v4
       - name: Clone Myriad 1.1.2
         run: git clone --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
-      - name: Parse all schematic labels, symbols and PCB nets
+      - name: Extract TFT and processor pad net mapping
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
-          for ver in ['myriad','myriad_0.2','myriad_0.3','myriad_0.4','myriad_0.5']:
-              base=Path('Myriad/hardware')/ver
-              sch=base/(ver+'.kicad_sch')
-              pcb=base/(ver+'.kicad_pcb')
-              print('\n===== ',ver,' =====')
-              if sch.exists():
-                  s=sch.read_text(errors='ignore')
-                  labels=sorted(set(re.findall(r'\((?:label|global_label|hierarchical_label)\s+"([^"]+)"',s)))
-                  vals=sorted(set(re.findall(r'\(property\s+"Value"\s+"([^"]+)"',s)))
-                  refs=sorted(set(re.findall(r'\(property\s+"Reference"\s+"([^"]+)"',s)))
-                  print('LABELS:', labels)
-                  print('VALUES:', vals[:250])
-                  print('REFS:', refs[:250])
-                  for pat in ['ELI2040','RP2040','Display','LCD','TFT','GC9','Connector','Conn_01x','SPI']:
-                      hits=[(i+1,l.strip()) for i,l in enumerate(s.splitlines()) if pat.lower() in l.lower()]
-                      if hits:
-                          print('SCH',pat,'HITS:',hits[:80])
-              if pcb.exists():
-                  p=pcb.read_text(errors='ignore')
-                  nets=re.findall(r'\(net\s+\d+\s+"([^"]*)"\)',p)
-                  print('NETS:',sorted(set(nets)))
-                  for pat in ['ELI2040','RP2040','Display','LCD','TFT','GC9','Connector','Conn_01x','SPI']:
-                      hits=[(i+1,l.strip()) for i,l in enumerate(p.splitlines()) if pat.lower() in l.lower()]
-                      if hits:
-                          print('PCB',pat,'HITS:',hits[:120])
+          p=Path('Myriad/hardware/myriad_0.5/myriad_0.5.kicad_pcb').read_text(errors='ignore')
+          lines=p.splitlines()
+          def blocks_starting(marker):
+              for i,l in enumerate(lines):
+                  if marker in l and '(footprint ' in l:
+                      depth=0; out=[]; started=False
+                      for x in lines[i:]:
+                          out.append(x)
+                          depth += x.count('(')-x.count(')')
+                          started=True
+                          if started and depth==0: break
+                      yield i+1,out
+          for marker in ['Round TFT 240x240','PinSocket_1x35_P2.54mm_Vertical']:
+              print('\n===',marker,'===')
+              for ln,b in blocks_starting(marker):
+                  text='\n'.join(b)
+                  ref=re.search(r'\(property "Reference" "([^"]+)"',text)
+                  val=re.search(r'\(property "Value" "([^"]+)"',text)
+                  print('BLOCK line',ln,'REF',ref.group(1) if ref else '?','VAL',val.group(1) if val else '?')
+                  # Collect each pad start through its local closing level and show number/net.
+                  for j,x in enumerate(b):
+                      m=re.match(r'\s*\(pad "?([^" ]+)"?',x)
+                      if not m: continue
+                      pad=m.group(1); d=0; chunk=[]
+                      for y in b[j:]:
+                          chunk.append(y); d+=y.count('(')-y.count(')')
+                          if d==0: break
+                      t=' '.join(chunk)
+                      nm=re.search(r'\(net\s+\d+\s+"([^"]*)"\)',t)
+                      if nm: print('PAD',pad,'NET',nm.group(1))
           PY
