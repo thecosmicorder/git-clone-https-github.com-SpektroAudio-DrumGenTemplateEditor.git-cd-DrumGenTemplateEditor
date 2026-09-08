@@ -19,6 +19,12 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+if (APPLE)
+    set(INSPIRATOR_FORMATS VST3 AU)
+else()
+    set(INSPIRATOR_FORMATS VST3)
+endif()
+
 juce_add_plugin(InspiratoR
     COMPANY_NAME "InspiratoR"
     BUNDLE_ID "com.inspirator.native"
@@ -39,7 +45,7 @@ juce_add_plugin(InspiratoR
     AU_MAIN_TYPE kAudioUnitType_MIDIProcessor
     AU_SANDBOX_SAFE TRUE
 
-    FORMATS VST3 AU
+    FORMATS ${INSPIRATOR_FORMATS}
     COPY_PLUGIN_AFTER_BUILD FALSE
 )
 
