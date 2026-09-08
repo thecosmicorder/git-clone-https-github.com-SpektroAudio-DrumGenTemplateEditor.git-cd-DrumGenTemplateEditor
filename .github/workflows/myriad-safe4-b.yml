@@ -1,0 +1,67 @@
+name: Build Myriad SAFE4 B
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths:
+      - 'myriad-safe4/**'
+      - '.github/workflows/myriad-safe4-b.yml'
+  workflow_dispatch:
+
+jobs:
+  build-b:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout build helper
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install Raspberry Pi Pico core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@6.0.0
+
+      - name: Clone exact Myriad 1.1.2 source
+        run: |
+          git clone --depth 1 --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad/Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
+
+      - name: Apply SAFE4 source patch
+        run: |
+          python3 myriad-safe4/prepare_safe4.py
+          grep -q 'N_OSCILLATOR_MODELS = 17;' Myriad/arduino_libmyriad/oscillatorModels.hpp
+          grep -q 'allOscModels0\[16\]' Myriad/Myriad_B/Myriad_B.ino
+          grep -q 'allOscModels1\[16\]' Myriad/Myriad_B/Myriad_B.ino
+
+      - name: Install shared Myriad Arduino library
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          ln -s "$GITHUB_WORKSPACE/Myriad/arduino_libmyriad" "$HOME/Arduino/libraries/arduino_libmyriad"
+
+      - name: Compile Myriad B for Raspberry Pi Pico
+        run: |
+          mkdir -p build-B
+          arduino-cli compile --fqbn rp2040:rp2040:rpipico --output-dir "$GITHUB_WORKSPACE/build-B" Myriad/Myriad_B 2>&1 | tee build-B/compile.log
+          test -s build-B/Myriad_B.ino.uf2
+
+      - name: Validate UF2
+        run: |
+          cp build-B/Myriad_B.ino.uf2 build-B/Myriad_B_SAFE4_TEST.uf2
+          ls -lh build-B/Myriad_B_SAFE4_TEST.uf2
+          sha256sum build-B/Myriad_B_SAFE4_TEST.uf2 | tee build-B/SHA256.txt
+          grep -E 'Sketch uses|Global variables use' build-B/compile.log | tee build-B/MEMORY.txt || true
+
+      - name: Upload B test firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-SAFE4-B-test
+          path: |
+            build-B/Myriad_B_SAFE4_TEST.uf2
+            build-B/SHA256.txt
+            build-B/MEMORY.txt
+            build-B/compile.log
+          if-no-files-found: error
