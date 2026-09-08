@@ -9,37 +9,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: git clone --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
-      - name: Extract ELI2040 pin names
+      - name: Clone ELI2040 hardware
+        run: git clone https://github.com/Emute-Lab-Instruments/ELI2040.git ELI2040
+      - name: Map header nets to RP2040 pads
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
-          s=Path('Myriad/hardware/myriad_0.5/myriad_0.5.kicad_sch').read_text(errors='ignore')
-          start=s.index('(symbol "emutelab:ELI2040_C"')
-          # balanced symbol block
-          d=0; end=None
-          for i,ch in enumerate(s[start:],start):
-              if ch=='(': d+=1
-              elif ch==')':
-                  d-=1
-                  if d==0: end=i+1; break
-          b=s[start:end]
-          # balanced pin blocks and their name/number
-          pos=0
-          while True:
-              k=b.find('(pin ',pos)
-              if k<0: break
-              d=0; e=None
-              for j,ch in enumerate(b[k:],k):
-                  if ch=='(': d+=1
-                  elif ch==')':
-                      d-=1
-                      if d==0: e=j+1; break
-              pb=b[k:e]
-              nm=re.search(r'\(name "([^"]+)"',pb)
-              no=re.search(r'\(number "([^"]+)"',pb)
-              at=re.search(r'\(at ([^\)]+)\)',pb)
-              if nm and no: print('HEADER',no.group(1),'NAME',nm.group(1),'AT',at.group(1) if at else '?')
-              pos=e
+          p=Path('ELI2040/ELI2040c/ELI2040c.kicad_pcb').read_text(errors='ignore')
+          lines=p.splitlines()
+          def footprints():
+              for i,l in enumerate(lines):
+                  if '(footprint ' not in l: continue
+                  d=0; out=[]
+                  for x in lines[i:]:
+                      out.append(x); d += x.count('(')-x.count(')')
+                      if d==0: break
+                  yield i+1,'\n'.join(out)
+          for ln,b in footprints():
+              ref=re.search(r'\(property "Reference" "([^"]+)"',b)
+              val=re.search(r'\(property "Value" "([^"]+)"',b)
+              fp=re.search(r'^\s*\(footprint "([^"]+)"',b,re.M)
+              r=ref.group(1) if ref else '?'; v=val.group(1) if val else '?'; f=fp.group(1) if fp else '?'
+              if 'RP2040' not in v and 'RP2040' not in f and '1x35' not in f: continue
+              print('\nBLOCK',ln,'REF',r,'VAL',v,'FP',f)
+              bl=b.splitlines()
+              for j,x in enumerate(bl):
+                  m=re.match(r'\s*\(pad "?([^" ]+)"?',x)
+                  if not m: continue
+                  pad=m.group(1); d=0; chunk=[]
+                  for y in bl[j:]:
+                      chunk.append(y); d += y.count('(')-y.count(')')
+                      if d==0: break
+                  t=' '.join(chunk)
+                  nm=re.search(r'\(net\s+\d+\s+"([^"]*)"\)',t)
+                  if nm: print('PAD',pad,'NET',nm.group(1))
           PY
