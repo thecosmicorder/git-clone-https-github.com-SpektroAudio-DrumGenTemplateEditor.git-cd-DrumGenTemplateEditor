@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Clone ELI2040 hardware
         run: git clone https://github.com/Emute-Lab-Instruments/ELI2040.git ELI2040
-      - name: Find high-pad-count carrier footprints
+      - name: List likely carrier connector footprints
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -35,12 +35,14 @@ jobs:
                   for y in bl[j:]:
                       chunk.append(y); d += y.count('(')-y.count(')')
                       if d==0: break
-                  t=' '.join(chunk); nm=re.search(r'\(net\s+\d+\s+"([^"]*)"\)',t)
-                  if nm: pads.append((pad,nm.group(1)))
-              if len(pads) < 30: continue
+                  t=' '.join(chunk)
+                  nm=re.search(r'\(net\s+\d+\s+"([^"]*)"\)',t)
+                  at=re.search(r'\(at\s+([^\)]+)\)',x)
+                  pads.append((pad,nm.group(1) if nm else '',at.group(1) if at else '?'))
+              if len(pads) < 10: continue
               ref=re.search(r'\(property "Reference" "([^"]+)"',b)
               val=re.search(r'\(property "Value" "([^"]+)"',b)
               fp=re.search(r'^\s*\(footprint "([^"]+)"',b,re.M)
               print('\nBLOCK',ln,'REF',ref.group(1) if ref else '?','VAL',val.group(1) if val else '?','FP',fp.group(1) if fp else '?','PADCOUNT',len(pads))
-              for pad,net in pads: print('PAD',pad,'NET',net)
+              for pad,net,at in pads: print('PAD',pad,'NET',net,'AT',at)
           PY
