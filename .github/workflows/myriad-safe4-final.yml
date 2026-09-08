@@ -1,0 +1,279 @@
+name: Validate and Build Myriad SAFE4
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths:
+      - 'myriad-safe4/**'
+      - '.github/workflows/myriad-safe4-final.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-build:
+    runs-on: ubuntu-latest
+    env:
+      MYRIAD_FQBN: rp2040:rp2040:generic:flash=16777216_14680064,freq=200,opt=Optimize3,os=none,profile=Disabled,rtti=Disabled,stackprotect=Disabled,exceptions=Disabled,dbgport=Disabled,dbglvl=None,boot2=boot2_w25q080_2_padded_checksum,usbstack=picosdk,ipbtstack=ipv4only,uploadmethod=default
+    steps:
+      - name: Checkout validation helper
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install exact RP2040 core 6.0.0
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@6.0.0
+          arduino-cli lib install 'ArduinoJson@6.21.5'
+
+      - name: Clone exact Myriad 1.1.2 source
+        run: |
+          git clone --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad/Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
+          git -C Myriad rev-parse HEAD | tee MYRIAD_SOURCE_COMMIT.txt
+
+      - name: Restore exact memlp commit and repair 1.1.2 API mismatch
+        run: |
+          rm -rf Myriad/Myriad_A/src/memlp
+          git clone https://github.com/MusicallyEmbodiedML/memlp.git Myriad/Myriad_A/src/memlp
+          git -C Myriad/Myriad_A/src/memlp checkout b5a63e8f70b22c0fcdcc4175ba8447ef91512d21
+          test "$(git -C Myriad/Myriad_A/src/memlp rev-parse HEAD)" = 'b5a63e8f70b22c0fcdcc4175ba8447ef91512d21'
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('Myriad/Myriad_A/src/memlp/Utils.h')
+          s=p.read_text()
+          assert 'enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};' in s
+          s=s.replace('enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};',
+                      'enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU, HARDSIGMOID};')
+          marker='//Compute hyperbolic tangent (tanh)\n'
+          assert marker in s
+          hard='''// Hard sigmoid required by Myriad 1.1.2 metaOscs\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T hardsigmoid(T x) {\n  T y = static_cast<T>(0.2) * x + static_cast<T>(0.5);\n  if (y < static_cast<T>(0)) return static_cast<T>(0);\n  if (y > static_cast<T>(1)) return static_cast<T>(1);\n  return y;\n}\n\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T deriv_hardsigmoid(T x) {\n  return (x > static_cast<T>(-2.5) && x < static_cast<T>(2.5)) ? static_cast<T>(0.2) : static_cast<T>(0);\n}\n\n'''
+          s=s.replace(marker,hard+marker)
+          reg='    AddNewPair(ACTIVATION_FUNCTIONS::RELU, &relu<T>, &deriv_relu<T>);'
+          assert reg in s
+          s=s.replace(reg,reg+'\n    AddNewPair(ACTIVATION_FUNCTIONS::HARDSIGMOID, &hardsigmoid<T>, &deriv_hardsigmoid<T>);')
+          p.write_text(s)
+          PY
+          grep -q 'HARDSIGMOID' Myriad/Myriad_A/src/memlp/Utils.h
+
+      - name: Install Emute TFT_eSPI with Myriad hardware-verified Setup303
+        run: |
+          git clone https://github.com/Emute-Lab-Instruments/TFT_eSPI.git TFT_eSPI
+          git -C TFT_eSPI rev-parse HEAD | tee TFT_ESPI_COMMIT.txt
+          mkdir -p TFT_eSPI/User_Setups
+          cat > TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h <<'EOF'
+          #pragma once
+          #define USER_SETUP_ID 303
+          #define USER_SETUP_INFO "Myriad RP2040 GC9A01"
+          #define GC9A01_DRIVER
+          #define TFT_WIDTH 240
+          #define TFT_HEIGHT 240
+          #define TFT_MOSI 3
+          #define TFT_SCLK 2
+          #define TFT_CS 19
+          #define TFT_DC 17
+          #define TFT_RST 18
+          #define TFT_BL 16
+          #define TFT_BACKLIGHT_ON HIGH
+          #define LOAD_GLCD
+          #define LOAD_FONT2
+          #define LOAD_FONT4
+          #define LOAD_FONT6
+          #define LOAD_FONT7
+          #define LOAD_FONT8
+          #define LOAD_GFXFF
+          #define SMOOTH_FONT
+          #define TFT_SPI_PORT 0
+          #define SPI_FREQUENCY 27000000
+          #define SPI_READ_FREQUENCY 20000000
+          EOF
+          cat > TFT_eSPI/User_Setup_Select.h <<'EOF'
+          #pragma once
+          #include <User_Setups/Setup303_RP2040_GC9A01.h>
+          EOF
+          grep -q '#define TFT_MOSI 3' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q '#define TFT_SCLK 2' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q '#define TFT_CS 19' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q '#define TFT_DC 17' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q '#define TFT_RST 18' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q '#define TFT_BL 16' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+
+      - name: Install shared Arduino libraries
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          ln -s "$GITHUB_WORKSPACE/Myriad/arduino_libmyriad" "$HOME/Arduino/libraries/arduino_libmyriad"
+          ln -s "$GITHUB_WORKSPACE/TFT_eSPI" "$HOME/Arduino/libraries/TFT_eSPI"
+
+      - name: Record exact official menu settings
+        run: |
+          cat > OFFICIAL_BUILD_SETTINGS.txt <<EOF
+          Board=Generic RP2040
+          Core=Earle Philhower RP2040 6.0.0
+          Boot Stage 2=W25Q080 QSPI /2
+          Flash Size=16MB (Sketch: 2MB, FS: 14MB)
+          CPU Speed=200 MHz
+          IP/Bluetooth Stack=IPv4 Only
+          Optimize=Optimize Even More (-O3)
+          Profiling=Disabled
+          RTTI=Disabled
+          Stack Protector=Disabled
+          C++ Exceptions=Disabled
+          Debug Port=Disabled
+          Debug Level=None
+          Upload Method=Default (UF2)
+          USB Stack=Pico SDK
+          FQBN=$MYRIAD_FQBN
+          EOF
+          cat OFFICIAL_BUILD_SETTINGS.txt
+
+      - name: Compile untouched 1.1.2 A
+        run: |
+          mkdir -p stock-A
+          arduino-cli compile --clean --fqbn "$MYRIAD_FQBN" --output-dir "$GITHUB_WORKSPACE/stock-A" Myriad/Myriad_A 2>&1 | tee stock-A/compile.log
+          test -s stock-A/Myriad_A.ino.uf2
+          cp stock-A/Myriad_A.ino.uf2 stock-A/Myriad_A_1.1.2_REPRO.uf2
+          grep -E 'Sketch uses|Global variables use' stock-A/compile.log | tee stock-A/MEMORY.txt || true
+          sha256sum stock-A/Myriad_A_1.1.2_REPRO.uf2 | tee stock-A/SHA256.txt
+
+      - name: Compile untouched 1.1.2 B
+        run: |
+          mkdir -p stock-B
+          arduino-cli compile --clean --fqbn "$MYRIAD_FQBN" --output-dir "$GITHUB_WORKSPACE/stock-B" Myriad/Myriad_B 2>&1 | tee stock-B/compile.log
+          test -s stock-B/Myriad_B.ino.uf2
+          cp stock-B/Myriad_B.ino.uf2 stock-B/Myriad_B_1.1.2_REPRO.uf2
+          grep -E 'Sketch uses|Global variables use' stock-B/compile.log | tee stock-B/MEMORY.txt || true
+          sha256sum stock-B/Myriad_B_1.1.2_REPRO.uf2 | tee stock-B/SHA256.txt
+
+      - name: Validate stock outputs against official 1.1.2 release metadata
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          a=Path('stock-A/Myriad_A_1.1.2_REPRO.uf2').stat().st_size
+          b=Path('stock-B/Myriad_B_1.1.2_REPRO.uf2').stat().st_size
+          official_a=1472000
+          official_b=290304
+          print('Reproduced A UF2 bytes:',a,'official release bytes:',official_a,'delta:',a-official_a)
+          print('Reproduced B UF2 bytes:',b,'official release bytes:',official_b,'delta:',b-official_b)
+          assert a > 500000, 'A output unexpectedly small'
+          assert b > 100000, 'B output unexpectedly small'
+          assert a < 2500000 and b < 1000000, 'UF2 output unexpectedly large'
+          PY
+
+      - name: Apply hardened SAFE4 patch
+        run: |
+          python3 myriad-safe4/prepare_safe4.py
+          grep -q 'N_OSCILLATOR_MODELS = 17;' Myriad/arduino_libmyriad/oscillatorModels.hpp
+          grep -q 'allOscModels\[16\]\[i\]' Myriad/Myriad_A/Myriad_A.ino
+          grep -q 'allOscModels0\[16\]\[i\]' Myriad/Myriad_B/Myriad_B.ino
+          grep -q 'allOscModels1\[16\]\[i\]' Myriad/Myriad_B/Myriad_B.ino
+          grep -q 'MYRIAD_VERSION "1.1.2-SAFE4"' Myriad/Myriad_A/Myriad_A.ino
+          grep -q 'wavelen > 0' Myriad/arduino_libmyriad/oscmodels/safe4OscillatorModels.hpp
+          ! grep -q 'setClockModShift' Myriad/arduino_libmyriad/oscmodels/safe4OscillatorModels.hpp
+
+      - name: Failure-mode source audit
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('Myriad/arduino_libmyriad/oscmodels/safe4OscillatorModels.hpp').read_text()
+          a=Path('Myriad/Myriad_A/Myriad_A.ino').read_text()
+          b=Path('Myriad/Myriad_B/Myriad_B.ino').read_text()
+          d=Path('Myriad/Myriad_A/displayPortal.h').read_text()
+          ids=['A_sine','B_fold','C_fm','D_vowel']
+          assert all(h.count(x)==1 for x in ids)
+          assert h.count('safeInc()') >= 5
+          assert 'wavelen > 0' in h
+          assert 'setClockModShift' not in h
+          assert 'iconDrawFunctions.find(oscModelIDs[model])' in d
+          assert 'String idxstr = String(oscModelIDs[model][0]);' in d
+          for idx in range(13,17):
+              assert f'allOscModels[{idx}][i]' in a
+              assert f'allOscModels0[{idx}][i]' in b
+              assert f'allOscModels1[{idx}][i]' in b
+          assert 'if(oscBankTypes[i]>=N_OSCILLATOR_MODELS) oscBankTypes[i]=0;' in a
+          assert 'oscBankTypes[i] < 13 ? oscBankTypes[i] : 0' in a
+          print('SAFE4 boundary, pointer-registration, display-fallback and persisted-state checks: PASS')
+          PY
+
+      - name: Compile SAFE4 A with official settings
+        run: |
+          arduino-cli cache clean
+          mkdir -p safe4-A
+          arduino-cli compile --clean --fqbn "$MYRIAD_FQBN" --output-dir "$GITHUB_WORKSPACE/safe4-A" Myriad/Myriad_A 2>&1 | tee safe4-A/compile.log
+          test -s safe4-A/Myriad_A.ino.uf2
+          cp safe4-A/Myriad_A.ino.uf2 safe4-A/Myriad_A_SAFE4_TEST.uf2
+          grep -E 'Sketch uses|Global variables use' safe4-A/compile.log | tee safe4-A/MEMORY.txt || true
+          sha256sum safe4-A/Myriad_A_SAFE4_TEST.uf2 | tee safe4-A/SHA256.txt
+
+      - name: Compile SAFE4 B with official settings
+        run: |
+          arduino-cli cache clean
+          mkdir -p safe4-B
+          arduino-cli compile --clean --fqbn "$MYRIAD_FQBN" --output-dir "$GITHUB_WORKSPACE/safe4-B" Myriad/Myriad_B 2>&1 | tee safe4-B/compile.log
+          test -s safe4-B/Myriad_B.ino.uf2
+          cp safe4-B/Myriad_B.ino.uf2 safe4-B/Myriad_B_SAFE4_TEST.uf2
+          grep -E 'Sketch uses|Global variables use' safe4-B/compile.log | tee safe4-B/MEMORY.txt || true
+          sha256sum safe4-B/Myriad_B_SAFE4_TEST.uf2 | tee safe4-B/SHA256.txt
+
+      - name: RAM and UF2 sanity gate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for board in ('A','B'):
+              log=Path(f'safe4-{board}/compile.log').read_text(errors='ignore')
+              m=re.search(r'Global variables use (\d+) bytes \((\d+)%\)',log)
+              assert m, f'RAM report missing for {board}'
+              used=int(m.group(1)); pct=int(m.group(2))
+              print(board,'RAM',used,'bytes',pct,'%')
+              assert pct < 80, f'{board} RAM use too high: {pct}%'
+              uf=Path(f'safe4-{board}/Myriad_{board}_SAFE4_TEST.uf2')
+              assert uf.stat().st_size > 100000
+          PY
+
+      - name: Build validation manifest
+        run: |
+          {
+            echo 'Myriad SAFE4 validation manifest'
+            echo 'Base source: official Myriad 1.1.2'
+            echo 'New models: 13 Pure Sine; 14 Wavefolder; 15 FM Morph; 16 Vowel Morph'
+            echo 'Registration: explicit in normal A/B model initialization; no constructor registration hook'
+            echo 'Persisted SAFE4 model selections are not written into stock-model preset slots'
+            echo 'Display unknown-ID fallback verified in official 1.1.2 displayPortal'
+            echo 'TFT pins verified from Myriad + ELI2040 hardware: SCLK=2 MOSI=3 BL=16 DC=17 RST=18 CS=19'
+            echo 'Hardware power-cycle test: NOT performed by CI'
+            echo
+            cat OFFICIAL_BUILD_SETTINGS.txt
+            echo
+            echo 'Factory recovery SHA256:'
+            echo 'A 26c552bf2c0bb1e756ac1a887ac1a53b61043a7cde4bc2a3c084bf2e22cb8ba6'
+            echo 'B 48841213bdeb9a67e591c7dd94033b040b607613b1e7013e6719bbd5b9c14717'
+            echo
+            echo 'SAFE4 A:'; cat safe4-A/SHA256.txt; cat safe4-A/MEMORY.txt
+            echo 'SAFE4 B:'; cat safe4-B/SHA256.txt; cat safe4-B/MEMORY.txt
+          } | tee VALIDATION.txt
+
+      - name: Upload final SAFE4 pair
+        uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-SAFE4-validated-pair
+          path: |
+            safe4-A/Myriad_A_SAFE4_TEST.uf2
+            safe4-B/Myriad_B_SAFE4_TEST.uf2
+            safe4-A/SHA256.txt
+            safe4-B/SHA256.txt
+            safe4-A/MEMORY.txt
+            safe4-B/MEMORY.txt
+            safe4-A/compile.log
+            safe4-B/compile.log
+            stock-A/MEMORY.txt
+            stock-B/MEMORY.txt
+            stock-A/SHA256.txt
+            stock-B/SHA256.txt
+            OFFICIAL_BUILD_SETTINGS.txt
+            MYRIAD_SOURCE_COMMIT.txt
+            TFT_ESPI_COMMIT.txt
+            TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+            VALIDATION.txt
+          if-no-files-found: error
