@@ -13,13 +13,34 @@ jobs:
       - uses: actions/checkout@v4
       - name: Clone Myriad 1.1.2
         run: git clone --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
-      - name: Show hardware display references
+      - name: Parse all schematic labels, symbols and PCB nets
         run: |
-          echo '=== source display refs ==='
-          grep -RniE 'GC9A01|TFT_|DISPLAY|LCD|MOSI|SCLK|SPI' Myriad/Myriad_A Myriad/readme.md 2>/dev/null | head -n 250 || true
-          echo '=== schematic labels ==='
-          grep -niE 'GC9A01|TFT|DISPLAY|LCD|MOSI|SCLK|SCK|CS|DC|RST' Myriad/hardware/myriad_0.5.kicad_sch 2>/dev/null | head -n 400 || true
-          echo '=== pcb nets/footprints ==='
-          grep -niE 'GC9A01|TFT|DISPLAY|LCD|MOSI|SCLK|SCK|CS|DC|RST' Myriad/hardware/myriad_0.5.kicad_pcb 2>/dev/null | head -n 500 || true
-          echo '=== hardware files ==='
-          find Myriad/hardware -maxdepth 2 -type f | sort | head -n 100
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for ver in ['myriad','myriad_0.2','myriad_0.3','myriad_0.4','myriad_0.5']:
+              base=Path('Myriad/hardware')/ver
+              sch=base/(ver+'.kicad_sch')
+              pcb=base/(ver+'.kicad_pcb')
+              print('\n===== ',ver,' =====')
+              if sch.exists():
+                  s=sch.read_text(errors='ignore')
+                  labels=sorted(set(re.findall(r'\((?:label|global_label|hierarchical_label)\s+"([^"]+)"',s)))
+                  vals=sorted(set(re.findall(r'\(property\s+"Value"\s+"([^"]+)"',s)))
+                  refs=sorted(set(re.findall(r'\(property\s+"Reference"\s+"([^"]+)"',s)))
+                  print('LABELS:', labels)
+                  print('VALUES:', vals[:250])
+                  print('REFS:', refs[:250])
+                  for pat in ['ELI2040','RP2040','Display','LCD','TFT','GC9','Connector','Conn_01x','SPI']:
+                      hits=[(i+1,l.strip()) for i,l in enumerate(s.splitlines()) if pat.lower() in l.lower()]
+                      if hits:
+                          print('SCH',pat,'HITS:',hits[:80])
+              if pcb.exists():
+                  p=pcb.read_text(errors='ignore')
+                  nets=re.findall(r'\(net\s+\d+\s+"([^"]*)"\)',p)
+                  print('NETS:',sorted(set(nets)))
+                  for pat in ['ELI2040','RP2040','Display','LCD','TFT','GC9','Connector','Conn_01x','SPI']:
+                      hits=[(i+1,l.strip()) for i,l in enumerate(p.splitlines()) if pat.lower() in l.lower()]
+                      if hits:
+                          print('PCB',pat,'HITS:',hits[:120])
+          PY
