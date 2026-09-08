@@ -1,4 +1,4 @@
-name: Diagnose Myriad TFT Wiring
+name: Diagnose Myriad Build Settings
 on:
   push:
     branches: [ myriad-safe4-build ]
@@ -9,14 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download official Myriad Arduino settings screenshot
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install exact RP2040 core
         run: |
-          curl -L --fail --retry 3 -o myriad_arduino_settings.png 'https://github.com/user-attachments/assets/81c5da8a-f282-4116-b620-a2a86a6cb852'
-          file myriad_arduino_settings.png
-          ls -lh myriad_arduino_settings.png
-      - name: Upload settings screenshot
-        uses: actions/upload-artifact@v4
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@6.0.0
+      - name: Print Generic RP2040 board options
+        run: |
+          arduino-cli board details -b rp2040:rp2040:generic --full | tee generic-board-details.txt
+          grep -Ei 'Boot Stage|Flash Size|CPU Speed|Optimize|USB Stack|Exception|RTTI|Debug|Profil|Stack Protector|IP/Bluetooth' generic-board-details.txt || true
+      - uses: actions/upload-artifact@v4
         with:
-          name: Myriad-official-Arduino-settings
-          path: myriad_arduino_settings.png
+          name: generic-rp2040-board-details
+          path: generic-board-details.txt
           if-no-files-found: error
