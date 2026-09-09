@@ -1,0 +1,146 @@
+name: Build Myriad SAFE4 v3
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-safe4-final-v3.yml' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      FQBN: rp2040:rp2040:generic:flash=16777216_14680064,freq=200,opt=Optimize3,os=none,profile=Disabled,rtti=Disabled,stackprotect=Disabled,exceptions=Disabled,dbgport=Disabled,dbglvl=None,boot2=boot2_w25q080_2_padded_checksum,usbstack=picosdk,ipbtstack=ipv4only,uploadmethod=default
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install toolchain
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@6.0.0
+          arduino-cli lib install 'ArduinoJson@7.4.3'
+      - name: Fetch exact Myriad 1.1.2
+        run: |
+          git clone --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+          test "$(git -C Myriad rev-parse HEAD)" = "6eb4a0d23fe934d39b7bc708f467c6e418c103ae"
+          rm -rf Myriad/Myriad_A/src/memlp
+          git clone https://github.com/MusicallyEmbodiedML/memlp.git Myriad/Myriad_A/src/memlp
+          git -C Myriad/Myriad_A/src/memlp checkout b5a63e8f70b22c0fcdcc4175ba8447ef91512d21
+      - name: Apply required memlp compatibility fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('Myriad/Myriad_A/src/memlp/Utils.h'); s=p.read_text()
+          s=s.replace('enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};','enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU, HARDSIGMOID};')
+          marker='//Compute hyperbolic tangent (tanh)\n'
+          hard='''template<typename T>\nMLP_ACTIVATION_FN\ninline T hardsigmoid(T x) {\n  T y = static_cast<T>(0.2) * x + static_cast<T>(0.5);\n  if (y < static_cast<T>(0)) return static_cast<T>(0);\n  if (y > static_cast<T>(1)) return static_cast<T>(1);\n  return y;\n}\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T deriv_hardsigmoid(T x) {\n  return (x > static_cast<T>(-2.5) && x < static_cast<T>(2.5)) ? static_cast<T>(0.2) : static_cast<T>(0);\n}\n\n'''
+          assert marker in s
+          s=s.replace(marker,hard+marker)
+          reg='    AddNewPair(ACTIVATION_FUNCTIONS::RELU, &relu<T>, &deriv_relu<T>);'
+          assert reg in s
+          s=s.replace(reg,reg+'\n    AddNewPair(ACTIVATION_FUNCTIONS::HARDSIGMOID, &hardsigmoid<T>, &deriv_hardsigmoid<T>);')
+          p.write_text(s)
+          PY
+      - name: Install TFT_eSPI and preserve driver-select logic
+        run: |
+          git clone https://github.com/Emute-Lab-Instruments/TFT_eSPI.git TFT_eSPI
+          mkdir -p TFT_eSPI/User_Setups
+          cat > TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h <<'EOF'
+          #pragma once
+          #define USER_SETUP_ID 303
+          #define USER_SETUP_INFO "Myriad RP2040 GC9A01"
+          #define GC9A01_DRIVER
+          #define TFT_WIDTH 240
+          #define TFT_HEIGHT 240
+          #define TFT_MOSI 3
+          #define TFT_SCLK 2
+          #define TFT_CS 19
+          #define TFT_DC 17
+          #define TFT_RST 18
+          #define TFT_BL 16
+          #define TFT_BACKLIGHT_ON HIGH
+          #define LOAD_GLCD
+          #define LOAD_FONT2
+          #define LOAD_FONT4
+          #define LOAD_FONT6
+          #define LOAD_FONT7
+          #define LOAD_FONT8
+          #define LOAD_GFXFF
+          #define SMOOTH_FONT
+          #define TFT_SPI_PORT 0
+          #define SPI_FREQUENCY 27000000
+          #define SPI_READ_FREQUENCY 20000000
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('TFT_eSPI/User_Setup_Select.h'); s=p.read_text()
+          old='#include <User_Setup.h>           // Default setup is root library folder'
+          assert old in s
+          s=s.replace(old,'//#include <User_Setup.h>           // Default setup is root library folder\n#include <User_Setups/Setup303_RP2040_GC9A01.h> // Myriad')
+          p.write_text(s)
+          PY
+          grep -q 'GC9A01_Defines.h' TFT_eSPI/User_Setup_Select.h
+          mkdir -p "$HOME/Arduino/libraries"
+          ln -s "$GITHUB_WORKSPACE/Myriad/arduino_libmyriad" "$HOME/Arduino/libraries/arduino_libmyriad"
+          ln -s "$GITHUB_WORKSPACE/TFT_eSPI" "$HOME/Arduino/libraries/TFT_eSPI"
+      - name: Compile untouched stock A
+        run: |
+          mkdir stockA
+          arduino-cli compile --clean --fqbn "$FQBN" --output-dir "$GITHUB_WORKSPACE/stockA" Myriad/Myriad_A 2>&1 | tee stockA.log
+          test -s stockA/Myriad_A.ino.uf2
+      - name: Compile untouched stock B
+        run: |
+          mkdir stockB
+          arduino-cli compile --clean --fqbn "$FQBN" --output-dir "$GITHUB_WORKSPACE/stockB" Myriad/Myriad_B 2>&1 | tee stockB.log
+          test -s stockB/Myriad_B.ino.uf2
+      - name: Apply SAFE4 and source failure checks
+        run: |
+          python3 myriad-safe4/prepare_safe4.py
+          grep -q 'N_OSCILLATOR_MODELS = 17;' Myriad/arduino_libmyriad/oscillatorModels.hpp
+          grep -q 'allOscModels\[16\]\[i\]' Myriad/Myriad_A/Myriad_A.ino
+          grep -q 'allOscModels0\[16\]\[i\]' Myriad/Myriad_B/Myriad_B.ino
+          grep -q 'allOscModels1\[16\]\[i\]' Myriad/Myriad_B/Myriad_B.ino
+          grep -q 'wavelen > 0' Myriad/arduino_libmyriad/oscmodels/safe4OscillatorModels.hpp
+          ! grep -q 'setClockModShift' Myriad/arduino_libmyriad/oscmodels/safe4OscillatorModels.hpp
+      - name: Compile SAFE4 A
+        run: |
+          arduino-cli cache clean
+          mkdir safeA
+          arduino-cli compile --clean --fqbn "$FQBN" --output-dir "$GITHUB_WORKSPACE/safeA" Myriad/Myriad_A 2>&1 | tee safeA.log
+          test -s safeA/Myriad_A.ino.uf2
+          cp safeA/Myriad_A.ino.uf2 Myriad_A_SAFE4_TEST.uf2
+      - name: Compile SAFE4 B
+        run: |
+          arduino-cli cache clean
+          mkdir safeB
+          arduino-cli compile --clean --fqbn "$FQBN" --output-dir "$GITHUB_WORKSPACE/safeB" Myriad/Myriad_B 2>&1 | tee safeB.log
+          test -s safeB/Myriad_B.ino.uf2
+          cp safeB/Myriad_B.ino.uf2 Myriad_B_SAFE4_TEST.uf2
+      - name: Final sanity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, hashlib
+          for n,log in [('A','safeA.log'),('B','safeB.log')]:
+              t=Path(log).read_text(errors='ignore')
+              m=re.search(r'Global variables use (\d+) bytes \((\d+)%\)',t)
+              assert m, f'RAM line missing {n}'
+              assert int(m.group(2)) < 80, f'RAM too high {n}: {m.group(2)}%'
+              p=Path(f'Myriad_{n}_SAFE4_TEST.uf2')
+              assert p.stat().st_size > 100000
+              print(n,p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          PY
+          sha256sum Myriad_A_SAFE4_TEST.uf2 Myriad_B_SAFE4_TEST.uf2 > SHA256.txt
+          grep -E 'Sketch uses|Global variables use' safeA.log safeB.log > MEMORY.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-SAFE4-v3-test-pair
+          path: |
+            Myriad_A_SAFE4_TEST.uf2
+            Myriad_B_SAFE4_TEST.uf2
+            SHA256.txt
+            MEMORY.txt
+            safeA.log
+            safeB.log
+          if-no-files-found: error
