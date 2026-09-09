@@ -1,0 +1,121 @@
+name: Build Myriad Stock 1.1.2 Control Pair
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths:
+      - '.github/workflows/myriad-stock-control-pair.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      MYRIAD_FQBN: rp2040:rp2040:generic:flash=16777216_14680064,freq=200,opt=Optimize3,os=none,profile=Disabled,rtti=Disabled,stackprotect=Disabled,exceptions=Disabled,dbgport=Disabled,dbglvl=None,boot2=boot2_w25q080_2_padded_checksum,usbstack=picosdk,ipbtstack=ipv4only,uploadmethod=default
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install toolchain
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@6.0.0
+          arduino-cli lib install 'ArduinoJson@7.4.3'
+      - name: Clone exact Myriad 1.1.2
+        run: |
+          git clone --depth 1 --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad/Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
+          git -C Myriad rev-parse HEAD | tee MYRIAD_COMMIT.txt
+      - name: Restore exact memlp commit and compatibility shim
+        run: |
+          rm -rf Myriad/Myriad_A/src/memlp
+          git clone https://github.com/MusicallyEmbodiedML/memlp.git Myriad/Myriad_A/src/memlp
+          git -C Myriad/Myriad_A/src/memlp checkout b5a63e8f70b22c0fcdcc4175ba8447ef91512d21
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('Myriad/Myriad_A/src/memlp/Utils.h'); s=p.read_text()
+          assert 'enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};' in s
+          s=s.replace('enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};','enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU, HARDSIGMOID};')
+          marker='//Compute hyperbolic tangent (tanh)\n'; assert marker in s
+          hard='''template<typename T>\nMLP_ACTIVATION_FN\ninline T hardsigmoid(T x) { T y=static_cast<T>(0.2)*x+static_cast<T>(0.5); if(y<static_cast<T>(0))return static_cast<T>(0); if(y>static_cast<T>(1))return static_cast<T>(1); return y; }\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T deriv_hardsigmoid(T x) { return (x>static_cast<T>(-2.5)&&x<static_cast<T>(2.5))?static_cast<T>(0.2):static_cast<T>(0); }\n\n'''
+          s=s.replace(marker,hard+marker)
+          reg='    AddNewPair(ACTIVATION_FUNCTIONS::RELU, &relu<T>, &deriv_relu<T>);'; assert reg in s
+          s=s.replace(reg,reg+'\n    AddNewPair(ACTIVATION_FUNCTIONS::HARDSIGMOID, &hardsigmoid<T>, &deriv_hardsigmoid<T>);')
+          p.write_text(s)
+          PY
+      - name: Install hardware-proven TFT setup
+        run: |
+          git clone https://github.com/Emute-Lab-Instruments/TFT_eSPI.git TFT_eSPI
+          cat > TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h <<'EOF'
+          #define USER_SETUP_ID 303
+          #define GC9A01_DRIVER
+          #define TFT_WIDTH 240
+          #define TFT_HEIGHT 240
+          #define TFT_MOSI 3
+          #define TFT_SCLK 2
+          #define TFT_CS 20
+          #define TFT_DC 18
+          #define TFT_RST 19
+          #define TFT_BL 17
+          #define TFT_BACKLIGHT_ON HIGH
+          #define LOAD_GLCD
+          #define LOAD_FONT2
+          #define LOAD_FONT4
+          #define LOAD_FONT6
+          #define LOAD_FONT7
+          #define LOAD_FONT8
+          #define LOAD_GFXFF
+          #define SMOOTH_FONT
+          #define SPI_FREQUENCY 40000000
+          #define SPI_READ_FREQUENCY 20000000
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('TFT_eSPI/User_Setup_Select.h'); s=p.read_text(); line='#include <User_Setup.h>           // Default setup is root library folder'; assert line in s
+          p.write_text(s.replace(line,'//#include <User_Setup.h>\n#include <User_Setups/Setup303_RP2040_GC9A01.h>'))
+          PY
+          mkdir -p "$HOME/Arduino/libraries"
+          ln -s "$GITHUB_WORKSPACE/Myriad/arduino_libmyriad" "$HOME/Arduino/libraries/arduino_libmyriad"
+          ln -s "$GITHUB_WORKSPACE/TFT_eSPI" "$HOME/Arduino/libraries/TFT_eSPI"
+      - name: Assert oscillator section is untouched stock
+        run: |
+          grep -q 'N_OSCILLATOR_MODELS = 13;' Myriad/arduino_libmyriad/oscillatorModels.hpp
+          ! grep -R -q 'safe4' Myriad/arduino_libmyriad Myriad/Myriad_A Myriad/Myriad_B
+          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad/Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
+      - name: Compile stock A
+        run: |
+          mkdir -p out-A
+          arduino-cli compile --clean --fqbn "$MYRIAD_FQBN" --output-dir "$GITHUB_WORKSPACE/out-A" Myriad/Myriad_A 2>&1 | tee out-A/compile.log
+          cp out-A/Myriad_A.ino.uf2 out-A/Myriad_A_STOCK_REBUILD_CONTROL.uf2
+          sha256sum out-A/Myriad_A_STOCK_REBUILD_CONTROL.uf2 | tee out-A/SHA256.txt
+          grep -E 'Sketch uses|Global variables use' out-A/compile.log | tee out-A/MEMORY.txt || true
+      - name: Compile stock B
+        run: |
+          mkdir -p out-B
+          arduino-cli compile --clean --fqbn "$MYRIAD_FQBN" --output-dir "$GITHUB_WORKSPACE/out-B" Myriad/Myriad_B 2>&1 | tee out-B/compile.log
+          cp out-B/Myriad_B.ino.uf2 out-B/Myriad_B_STOCK_REBUILD_CONTROL.uf2
+          sha256sum out-B/Myriad_B_STOCK_REBUILD_CONTROL.uf2 | tee out-B/SHA256.txt
+          grep -E 'Sketch uses|Global variables use' out-B/compile.log | tee out-B/MEMORY.txt || true
+      - name: Manifest
+        run: |
+          cat > CONTROL_TEST.txt <<'EOF'
+          MYRIAD STOCK 1.1.2 REBUILD CONTROL PAIR
+          No custom oscillators. N_OSCILLATOR_MODELS remains 13.
+          Only non-stock source change is the memlp HARDSIGMOID compatibility shim required to compile the published 1.1.2 source and the reconstructed TFT Setup303 that has already been proven on hardware.
+          Purpose: determine whether our build environment changes audio compared with official factory UF2s.
+          EOF
+          echo A >> CONTROL_TEST.txt; cat out-A/MEMORY.txt out-A/SHA256.txt >> CONTROL_TEST.txt
+          echo B >> CONTROL_TEST.txt; cat out-B/MEMORY.txt out-B/SHA256.txt >> CONTROL_TEST.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-stock-1.1.2-rebuild-control-pair
+          path: |
+            out-A/Myriad_A_STOCK_REBUILD_CONTROL.uf2
+            out-B/Myriad_B_STOCK_REBUILD_CONTROL.uf2
+            out-A/SHA256.txt
+            out-B/SHA256.txt
+            out-A/MEMORY.txt
+            out-B/MEMORY.txt
+            CONTROL_TEST.txt
+          if-no-files-found: error
