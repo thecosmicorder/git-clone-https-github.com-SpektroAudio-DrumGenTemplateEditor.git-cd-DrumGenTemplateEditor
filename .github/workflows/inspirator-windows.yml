@@ -35,6 +35,10 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           C:\b\InspiratoEngineSmoke.exe
           if errorlevel 1 exit /b %errorlevel%
+          dumpbin /DEPENDENTS "C:\b\InspiratoR_artefacts\Release\VST3\InspiratoR.vst3\Contents\x86_64-win\InspiratoR.vst3" > C:\b\dependencies.txt
+          if errorlevel 1 exit /b %errorlevel%
+          type C:\b\dependencies.txt
+          findstr /I /C:"MSVCP140.dll" /C:"VCRUNTIME140.dll" /C:"VCRUNTIME140_1.dll" C:\b\dependencies.txt && exit /b 1 || ver > nul
 
       - name: Stage Windows VST3
         shell: pwsh
@@ -46,10 +50,31 @@ jobs:
           Copy-Item -Recurse -Force $plugin "dist\Windows\InspiratoR.vst3"
           if (-not (Test-Path 'dist\Windows\InspiratoR.vst3')) { throw 'Staged VST3 bundle missing' }
 
+      - name: Validate VST3 with pluginval
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest 'https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip' -OutFile "$env:RUNNER_TEMP\pluginval.zip"
+          Expand-Archive "$env:RUNNER_TEMP\pluginval.zip" -DestinationPath "$env:RUNNER_TEMP\pluginval" -Force
+          $validator = Get-ChildItem "$env:RUNNER_TEMP\pluginval" -Filter pluginval.exe -Recurse | Select-Object -First 1
+          if (-not $validator) { throw 'pluginval.exe not found' }
+          New-Item -ItemType Directory -Force -Path dist\pluginval | Out-Null
+          & $validator.FullName --validate-in-process --strictness-level 5 --output-dir "dist\pluginval" "dist\Windows\InspiratoR.vst3"
+          if ($LASTEXITCODE -ne 0) { throw "pluginval failed with exit code $LASTEXITCODE" }
+
       - name: Upload Windows VST3
         uses: actions/upload-artifact@v4
         with:
           name: InspiratoR-Windows-x64-VST3
           path: dist/Windows/InspiratoR.vst3
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload validation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: InspiratoR-Windows-pluginval-log
+          path: dist/pluginval
+          if-no-files-found: ignore
           retention-days: 30
