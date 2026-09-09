@@ -24,17 +24,18 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
+          subst W: "%GITHUB_WORKSPACE%"
           where cl
           cl 2>&1 | findstr /C:"Version"
-          cmake -S InspiratoR_Native -B build-inspirator -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-inspirator --target InspiratoEngineSmoke InspiratoR_VST3 --parallel
-          build-inspirator\InspiratoEngineSmoke.exe
+          cmake -S W:\InspiratoR_Native -B C:\b -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build C:\b --target InspiratoEngineSmoke InspiratoR_VST3 --parallel
+          C:\b\InspiratoEngineSmoke.exe
 
       - name: Stage Windows VST3
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist\Windows | Out-Null
-          Copy-Item -Recurse -Force "build-inspirator\InspiratoR_artefacts\Release\VST3\InspiratoR.vst3" "dist\Windows\InspiratoR.vst3"
+          Copy-Item -Recurse -Force "C:\b\InspiratoR_artefacts\Release\VST3\InspiratoR.vst3" "dist\Windows\InspiratoR.vst3"
 
       - name: Upload Windows VST3
         uses: actions/upload-artifact@v4
