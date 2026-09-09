@@ -1,0 +1,57 @@
+name: Inspect ELI2040 Large Footprints
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/eli2040-large-footprints.yml' ]
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/Emute-Lab-Instruments/ELI2040.git ELI2040
+      - name: Print footprints with many pads
+        run: |
+          python3 - <<'PY' | tee large-footprints.txt
+          from pathlib import Path
+          import re
+          p=Path('ELI2040/ELI2040b/ELI2040b.kicad_pcb')
+          s=p.read_text(errors='ignore')
+          def blocks(text, token='(footprint '):
+            out=[];pos=0
+            while True:
+              i=text.find(token,pos)
+              if i<0: break
+              d=0;q=False;esc=False;j=i
+              while j<len(text):
+                c=text[j]
+                if q:
+                  if esc:esc=False
+                  elif c=='\\':esc=True
+                  elif c=='"':q=False
+                else:
+                  if c=='"':q=True
+                  elif c=='(':d+=1
+                  elif c==')':
+                    d-=1
+                    if d==0:out.append(text[i:j+1]);pos=j+1;break
+                j+=1
+              else:break
+            return out
+          for b in blocks(s):
+            pads=[]
+            for m in re.finditer(r'\(pad\s+"?([^"\s\)]+)"?.{0,2500}?\(net\s+\d+\s+"([^"]+)"\)',b,re.S):
+              pads.append((m.group(1),m.group(2)))
+            # also count pad constructs even with no net
+            cnt=len(re.findall(r'\(pad\s',b))
+            if cnt>=15:
+              first=b.splitlines()[0]
+              refs=re.findall(r'\(property "Reference" "([^"]+)"',b)
+              vals=re.findall(r'\(property "Value" "([^"]+)"',b)
+              print('\n###',first,'REF',refs[:2],'VAL',vals[:2],'PADCOUNT',cnt)
+              for pad,net in pads: print('PAD',pad,'NET',net)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eli2040-large-footprints
+          path: large-footprints.txt
