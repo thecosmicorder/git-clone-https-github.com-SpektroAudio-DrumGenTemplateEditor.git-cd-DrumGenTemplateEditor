@@ -1,9 +1,15 @@
 cmake_minimum_required(VERSION 3.25)
-project(InspiratoR VERSION 0.2.0 LANGUAGES C CXX)
+project(InspiratoR VERSION 0.2.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Ship a self-contained Windows VST3. This avoids requiring a particular
+# Visual C++ Redistributable revision on the user's machine.
+if (MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
+endif()
 
 include(FetchContent)
 
@@ -33,7 +39,7 @@ juce_add_plugin(InspiratoR
     PRODUCT_NAME "InspiratoR"
     PLUGIN_NAME "InspiratoR"
     DESCRIPTION "Generative melody and chord MIDI sequencer"
-    VERSION 0.2.0
+    VERSION 0.2.1
 
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE
