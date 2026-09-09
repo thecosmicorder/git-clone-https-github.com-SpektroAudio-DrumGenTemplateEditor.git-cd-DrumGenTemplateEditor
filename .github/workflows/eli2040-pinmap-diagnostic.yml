@@ -1,0 +1,61 @@
+name: Trace ELI2040 Pin Map
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/eli2040-pinmap-diagnostic.yml' ]
+  workflow_dispatch:
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/Emute-Lab-Instruments/ELI2040.git ELI2040
+      - name: Map carrier connector pads to GPIO nets
+        run: |
+          python3 - <<'PY' | tee eli2040-pinmap.txt
+          from pathlib import Path
+          import re
+          files=list(Path('ELI2040').rglob('*.kicad_pcb'))
+          print('PCBS', [str(x) for x in files])
+          for p in files:
+            s=p.read_text(errors='ignore')
+            if '1x35' not in s: continue
+            print('\n###',p)
+            # print footprint snippets that contain 1x35, RP2040/Pico
+            def blocks(text, token='(footprint '):
+              out=[]; pos=0
+              while True:
+                i=text.find(token,pos)
+                if i<0: break
+                d=0; q=False; esc=False; j=i
+                while j<len(text):
+                  c=text[j]
+                  if q:
+                    if esc: esc=False
+                    elif c=='\\': esc=True
+                    elif c=='"': q=False
+                  else:
+                    if c=='"': q=True
+                    elif c=='(': d+=1
+                    elif c==')':
+                      d-=1
+                      if d==0:
+                        out.append(text[i:j+1]); pos=j+1; break
+                  j+=1
+                else: break
+              return out
+            for b in blocks(s):
+              if not re.search(r'1x35|RP2040|Pico',b,re.I): continue
+              first=b.splitlines()[0]
+              refs=re.findall(r'\(property "Reference" "([^"]+)"',b)
+              vals=re.findall(r'\(property "Value" "([^"]+)"',b)
+              print('\nFOOT',first,'REF',refs[:2],'VAL',vals[:2])
+              for m in re.finditer(r'\(pad\s+"?([^"\s\)]+)"?.{0,1500}?\(net\s+\d+\s+"([^"]+)"\)',b,re.S):
+                pad,net=m.group(1),m.group(2)
+                if pad in {'15','16','17','18','31','32'} or re.search(r'GPIO|GP\d+',net,re.I):
+                  print('PAD',pad,'NET',net)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eli2040-pinmap
+          path: eli2040-pinmap.txt
