@@ -1,0 +1,49 @@
+name: Inspect Official Myriad 1.1.2 UF2 Metadata
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-official-uf2-metadata.yml' ]
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download official release UF2s
+        run: |
+          curl -L --fail --retry 3 -o official_A.uf2 https://github.com/Emute-Lab-Instruments/Myriad/releases/download/1.1.2/Myriad_A.1.1.2.ino.uf2
+          curl -L --fail --retry 3 -o official_B.uf2 https://github.com/Emute-Lab-Instruments/Myriad/releases/download/1.1.2/Myriad_B.1.1.2.ino.uf2
+          sha256sum official_A.uf2 official_B.uf2 | tee SHA256.txt
+          ls -l official_A.uf2 official_B.uf2 | tee SIZES.txt
+      - name: Extract printable metadata
+        run: |
+          strings -a official_A.uf2 | grep -Ei 'Pico SDK|Arduino|RP2040|GCC|compiler|build|version|PICO_BOARD|sdk' | head -200 > A_strings.txt || true
+          strings -a official_B.uf2 | grep -Ei 'Pico SDK|Arduino|RP2040|GCC|compiler|build|version|PICO_BOARD|sdk' | head -200 > B_strings.txt || true
+          echo '=== A ==='; cat A_strings.txt
+          echo '=== B ==='; cat B_strings.txt
+      - name: Try picotool metadata
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y picotool || true
+          if command -v picotool >/dev/null; then
+            picotool info -a official_A.uf2 > A_picotool.txt 2>&1 || true
+            picotool info -a official_B.uf2 > B_picotool.txt 2>&1 || true
+          else
+            echo 'picotool unavailable' > A_picotool.txt
+            echo 'picotool unavailable' > B_picotool.txt
+          fi
+          echo '=== A PICOTOOL ==='; cat A_picotool.txt
+          echo '=== B PICOTOOL ==='; cat B_picotool.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-official-1.1.2-UF2-metadata
+          path: |
+            SHA256.txt
+            SIZES.txt
+            A_strings.txt
+            B_strings.txt
+            A_picotool.txt
+            B_picotool.txt
+          if-no-files-found: error
