@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(InspiratoR VERSION 0.2.1 LANGUAGES C CXX)
+project(InspiratoR VERSION 0.2.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,15 +39,18 @@ juce_add_plugin(InspiratoR
     PRODUCT_NAME "InspiratoR"
     PLUGIN_NAME "InspiratoR"
     DESCRIPTION "Generative melody and chord MIDI sequencer"
-    VERSION 0.2.1
+    VERSION 0.2.2
 
-    IS_SYNTH FALSE
+    # Ableton Live does not reliably instantiate pure VST3 MIDI-effect classes.
+    # Publish the VST3 as a silent instrument with MIDI out instead. This keeps
+    # the sequencer engine unchanged while making the wrapper host-compatible.
+    IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT TRUE
-    IS_MIDI_EFFECT TRUE
+    IS_MIDI_EFFECT FALSE
     VST_NUM_MIDI_INS 1
     VST_NUM_MIDI_OUTS 1
-    VST3_CATEGORIES Fx Generator Tools
+    VST3_CATEGORIES Instrument Generator Tools
     AU_MAIN_TYPE kAudioUnitType_MIDIProcessor
     AU_SANDBOX_SAFE TRUE
 
