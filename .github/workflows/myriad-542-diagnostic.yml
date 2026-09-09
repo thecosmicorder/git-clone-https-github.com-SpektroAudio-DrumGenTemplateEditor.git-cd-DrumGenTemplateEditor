@@ -1,0 +1,118 @@
+name: Diagnose Myriad Stock A Core 5.4.2
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-542-diagnostic.yml' ]
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install core 5.4.2 and inspect board options
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@5.4.2
+          arduino-cli lib install 'ArduinoJson@7.4.3'
+          arduino-cli board details -b rp2040:rp2040:generic --full > BOARD_DETAILS.txt 2>&1 || true
+          arduino-cli core list > CORE_LIST.txt
+          arduino-cli lib list > LIB_LIST.txt
+      - name: Prepare exact published 1.1.2 source
+        run: |
+          git clone --depth 1 --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+          rm -rf Myriad/Myriad_A/src/memlp
+          git clone https://github.com/MusicallyEmbodiedML/memlp.git Myriad/Myriad_A/src/memlp
+          git -C Myriad/Myriad_A/src/memlp checkout b5a63e8f70b22c0fcdcc4175ba8447ef91512d21
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('Myriad/Myriad_A/src/memlp/Utils.h'); s=p.read_text()
+          assert 'enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};' in s
+          s=s.replace('enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};','enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU, HARDSIGMOID};')
+          marker='//Compute hyperbolic tangent (tanh)\n'; assert marker in s
+          hard='''template<typename T>\nMLP_ACTIVATION_FN\ninline T hardsigmoid(T x) { T y=static_cast<T>(0.2)*x+static_cast<T>(0.5); if(y<static_cast<T>(0))return static_cast<T>(0); if(y>static_cast<T>(1))return static_cast<T>(1); return y; }\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T deriv_hardsigmoid(T x) { return (x>static_cast<T>(-2.5)&&x<static_cast<T>(2.5))?static_cast<T>(0.2):static_cast<T>(0); }\n\n'''
+          s=s.replace(marker,hard+marker)
+          reg='    AddNewPair(ACTIVATION_FUNCTIONS::RELU, &relu<T>, &deriv_relu<T>);'; assert reg in s
+          s=s.replace(reg,reg+'\n    AddNewPair(ACTIVATION_FUNCTIONS::HARDSIGMOID, &hardsigmoid<T>, &deriv_hardsigmoid<T>);')
+          p.write_text(s)
+          PY
+      - name: Install proven TFT setup
+        run: |
+          git clone https://github.com/Emute-Lab-Instruments/TFT_eSPI.git TFT_eSPI
+          cat > TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h <<'EOF'
+          #define USER_SETUP_ID 303
+          #define GC9A01_DRIVER
+          #define TFT_WIDTH 240
+          #define TFT_HEIGHT 240
+          #define TFT_MOSI 3
+          #define TFT_SCLK 2
+          #define TFT_CS 20
+          #define TFT_DC 18
+          #define TFT_RST 19
+          #define TFT_BL 17
+          #define TFT_BACKLIGHT_ON HIGH
+          #define LOAD_GLCD
+          #define LOAD_FONT2
+          #define LOAD_FONT4
+          #define LOAD_FONT6
+          #define LOAD_FONT7
+          #define LOAD_FONT8
+          #define LOAD_GFXFF
+          #define SMOOTH_FONT
+          #define SPI_FREQUENCY 40000000
+          #define SPI_READ_FREQUENCY 20000000
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('TFT_eSPI/User_Setup_Select.h'); s=p.read_text()
+          line='#include <User_Setup.h>           // Default setup is root library folder'; assert line in s
+          p.write_text(s.replace(line,'//#include <User_Setup.h>\n#include <User_Setups/Setup303_RP2040_GC9A01.h>'))
+          PY
+          mkdir -p "$HOME/Arduino/libraries"
+          ln -s "$GITHUB_WORKSPACE/Myriad/arduino_libmyriad" "$HOME/Arduino/libraries/arduino_libmyriad"
+          ln -s "$GITHUB_WORKSPACE/TFT_eSPI" "$HOME/Arduino/libraries/TFT_eSPI"
+      - name: Capture menu option validation
+        shell: bash
+        run: |
+          set +e
+          FQBN='rp2040:rp2040:generic:flash=16777216_14680064,freq=200,opt=Optimize3,os=none,profile=Disabled,rtti=Disabled,stackprotect=Disabled,exceptions=Disabled,dbgport=Disabled,dbglvl=None,boot2=boot2_w25q080_2_padded_checksum,usbstack=picosdk,ipbtstack=ipv4only,uploadmethod=default'
+          echo "$FQBN" > REQUESTED_FQBN.txt
+          arduino-cli board details -b "$FQBN" --full > FQBN_DETAILS.txt 2>&1
+          echo $? > FQBN_DETAILS_EXIT.txt
+          grep -Ei 'flash|freq|opt|boot2|usb|rtti|exception|profile|stack|debug|invalid|unknown|error' FQBN_DETAILS.txt > FQBN_SUMMARY.txt || true
+          exit 0
+      - name: Capture stock A compile failure
+        shell: bash
+        run: |
+          set +e
+          FQBN='rp2040:rp2040:generic:flash=16777216_14680064,freq=200,opt=Optimize3,os=none,profile=Disabled,rtti=Disabled,stackprotect=Disabled,exceptions=Disabled,dbgport=Disabled,dbglvl=None,boot2=boot2_w25q080_2_padded_checksum,usbstack=picosdk,ipbtstack=ipv4only,uploadmethod=default'
+          mkdir -p out-A
+          arduino-cli compile --clean --fqbn "$FQBN" --output-dir "$GITHUB_WORKSPACE/out-A" Myriad/Myriad_A > compile-A.log 2>&1
+          rc=$?
+          echo $rc > COMPILE_EXIT.txt
+          grep -n -E '(^|[ :])(error:|fatal error:|Error:|invalid option|Invalid|unknown option|not found|No such file)' compile-A.log | head -100 > ERROR_SUMMARY.txt || true
+          tail -200 compile-A.log > COMPILE_TAIL.txt
+          echo "compile exit=$rc"
+          cat ERROR_SUMMARY.txt || true
+          exit 0
+      - name: Upload diagnostic artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-542-A-compile-diagnostic
+          path: |
+            BOARD_DETAILS.txt
+            CORE_LIST.txt
+            LIB_LIST.txt
+            REQUESTED_FQBN.txt
+            FQBN_DETAILS.txt
+            FQBN_DETAILS_EXIT.txt
+            FQBN_SUMMARY.txt
+            COMPILE_EXIT.txt
+            ERROR_SUMMARY.txt
+            COMPILE_TAIL.txt
+            compile-A.log
+          if-no-files-found: error
