@@ -40,29 +40,30 @@ jobs:
           type C:\b\dependencies.txt
           findstr /I /C:"MSVCP140.dll" /C:"VCRUNTIME140.dll" /C:"VCRUNTIME140_1.dll" C:\b\dependencies.txt && exit /b 1 || ver > nul
 
-      - name: Stage Windows VST3 without optional module manifest
+      - name: Validate VST3 with pluginval from short path
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $plugin = 'C:\b\InspiratoR_artefacts\Release\VST3\InspiratoR.vst3'
           if (-not (Test-Path $plugin)) { throw "VST3 bundle missing: $plugin" }
-          New-Item -ItemType Directory -Force -Path dist\Windows | Out-Null
-          Copy-Item -Recurse -Force $plugin "dist\Windows\InspiratoR.vst3"
-          $moduleInfo = 'dist\Windows\InspiratoR.vst3\Contents\Resources\moduleinfo.json'
-          if (Test-Path $moduleInfo) { Remove-Item -Force $moduleInfo }
-          if (-not (Test-Path 'dist\Windows\InspiratoR.vst3\Contents\x86_64-win\InspiratoR.vst3')) { throw 'Staged VST3 binary missing' }
+          Invoke-WebRequest 'https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip' -OutFile 'C:\pluginval.zip'
+          Expand-Archive 'C:\pluginval.zip' -DestinationPath 'C:\pluginval' -Force
+          $validator = Get-ChildItem 'C:\pluginval' -Filter pluginval.exe -Recurse | Select-Object -First 1
+          if (-not $validator) { throw 'pluginval.exe not found' }
+          New-Item -ItemType Directory -Force -Path 'C:\pvlogs' | Out-Null
+          & $validator.FullName --validate-in-process --strictness-level 5 --output-dir 'C:\pvlogs' $plugin
+          if ($LASTEXITCODE -ne 0) { throw "pluginval failed with exit code $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force -Path dist\pluginval | Out-Null
+          Copy-Item -Recurse -Force 'C:\pvlogs\*' 'dist\pluginval\' -ErrorAction SilentlyContinue
 
-      - name: Validate VST3 with pluginval
+      - name: Stage Windows VST3
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Invoke-WebRequest 'https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip' -OutFile "$env:RUNNER_TEMP\pluginval.zip"
-          Expand-Archive "$env:RUNNER_TEMP\pluginval.zip" -DestinationPath "$env:RUNNER_TEMP\pluginval" -Force
-          $validator = Get-ChildItem "$env:RUNNER_TEMP\pluginval" -Filter pluginval.exe -Recurse | Select-Object -First 1
-          if (-not $validator) { throw 'pluginval.exe not found' }
-          New-Item -ItemType Directory -Force -Path dist\pluginval | Out-Null
-          & $validator.FullName --validate-in-process --strictness-level 5 --output-dir "dist\pluginval" "dist\Windows\InspiratoR.vst3"
-          if ($LASTEXITCODE -ne 0) { throw "pluginval failed with exit code $LASTEXITCODE" }
+          $plugin = 'C:\b\InspiratoR_artefacts\Release\VST3\InspiratoR.vst3'
+          New-Item -ItemType Directory -Force -Path dist\Windows | Out-Null
+          Copy-Item -Recurse -Force $plugin "dist\Windows\InspiratoR.vst3"
+          if (-not (Test-Path 'dist\Windows\InspiratoR.vst3\Contents\x86_64-win\InspiratoR.vst3')) { throw 'Staged VST3 binary missing' }
 
       - name: Upload Windows VST3
         uses: actions/upload-artifact@v4
