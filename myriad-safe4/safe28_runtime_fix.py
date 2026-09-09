@@ -11,7 +11,7 @@ assert old in s, 'extended icon allocation block not found'
 s=s.replace(old,new)
 
 old='''        // tft.fillRect(iconX[i], iconY[i], iconw, iconh, ELI_BLUE);\n        oscModelIcons[i][nextState.oscModel[i]]->pushSprite(iconX[i], iconY[i]);'''
-new='''        // Stock models use their original pre-rendered icons.\n        // Custom models are drawn directly, avoiding persistent TFT sprite heap.\n        const size_t displayModel = nextState.oscModel[i] < N_OSCILLATOR_MODELS ? nextState.oscModel[i] : 0;\n        if (displayModel < 13) {\n          oscModelIcons[i][displayModel]->pushSprite(iconX[i], iconY[i]);\n        } else {\n          tft.fillRect(iconX[i], iconY[i], iconw, iconh, bankColArray[i]);\n          tft.setTextFont(1);\n          tft.setTextColor(TFT_BLACK, bankColArray[i]);\n          tft.setTextDatum(MC_DATUM);\n          String shortID = oscModelIDs[displayModel].substring(0,3);\n          tft.drawString(shortID.c_str(), iconX[i] + (iconw>>1), iconY[i] + (iconh>>1));\n        }'''
+new='''        // Stock models use their original pre-rendered icons.\n        // Custom models are drawn directly, avoiding persistent TFT sprite heap.\n        const size_t displayModel = nextState.oscModel[i] < N_OSCILLATOR_MODELS ? nextState.oscModel[i] : 0;\n        if (displayModel < 13) {\n          oscModelIcons[i][displayModel]->pushSprite(iconX[i], iconY[i]);\n        } else {\n          static const char* customLabels[15] = {\n            "SIN","FLD","FM","VOW","SUP","PHS","ADD","SUB","SYN","PWM","MET","PLK","RED","BIT","ORG"\n          };\n          tft.fillRect(iconX[i], iconY[i], iconw, iconh, bankColArray[i]);\n          tft.setTextFont(1);\n          tft.setTextColor(TFT_BLACK, bankColArray[i]);\n          tft.setTextDatum(MC_DATUM);\n          const char* shortID = customLabels[displayModel - 13];\n          tft.drawString(shortID, iconX[i] + (iconw>>1), iconY[i] + (iconh>>1));\n        }'''
 assert old in s, 'oscillator icon push block not found'
 s=s.replace(old,new)
 d.write_text(s)
@@ -37,6 +37,7 @@ b.write_text(s)
 dt=d.read_text(); at=a.read_text(); bt=b.read_text()
 assert 'if (model >= 13)' in dt
 assert 'displayModel < 13' in dt
+assert 'customLabels[15]' in dt
 assert 'oscModelIcons[bank][model].reset();' in dt
 assert at.count('safeModelIdx') >= 2
 assert bt.count('safeModelIdx') >= 4
