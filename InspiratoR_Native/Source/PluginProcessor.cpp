@@ -13,7 +13,8 @@ float raw(const juce::AudioProcessorValueTreeState& s, const juce::String& id)
 }
 
 InspiratoRAudioProcessor::InspiratoRAudioProcessor()
-    : AudioProcessor(BusesProperties()),
+    : AudioProcessor(BusesProperties()
+          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "STATE", createParameterLayout())
 {
 }
@@ -80,7 +81,7 @@ void InspiratoRAudioProcessor::releaseResources() {}
 bool InspiratoRAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
     return layouts.getMainInputChannelSet().isDisabled()
-        && layouts.getMainOutputChannelSet().isDisabled();
+        && layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
 double InspiratoRAudioProcessor::quarterNotesForRateIndex(int rateIndex)
@@ -217,6 +218,9 @@ void InspiratoRAudioProcessor::flushGeneratedNotes(juce::MidiBuffer& midi, int s
 void InspiratoRAudioProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
+
+    // The stereo output exists solely so hosts such as Ableton Live can
+    // instantiate the VST3 reliably. InspiratoR remains a MIDI generator.
     audio.clear();
 
     const auto numSamples = audio.getNumSamples() > 0 ? audio.getNumSamples() : getBlockSize();
@@ -228,9 +232,9 @@ void InspiratoRAudioProcessor::processBlock(juce::AudioBuffer<float>& audio, juc
 
     double bpm = 120.0;
     bool hostPlaying = false;
-    if (auto* playHead = getPlayHead())
+    if (auto* hostPlayHead = getPlayHead())
     {
-        if (auto pos = playHead->getPosition())
+        if (auto pos = hostPlayHead->getPosition())
         {
             if (auto b = pos->getBpm()) bpm = juce::jlimit(20.0, 400.0, *b);
             hostPlaying = pos->getIsPlaying();
