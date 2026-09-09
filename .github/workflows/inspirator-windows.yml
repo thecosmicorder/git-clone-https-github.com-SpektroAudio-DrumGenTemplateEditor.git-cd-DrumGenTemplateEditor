@@ -20,17 +20,15 @@ jobs:
       - name: Checkout build branch
         uses: actions/checkout@v4
 
-      - name: Configure x64 Release
-        shell: pwsh
-        run: cmake -S InspiratoR_Native -B build-inspirator -G "Visual Studio 18 2026" -A x64
-
-      - name: Build engine smoke test and VST3
-        shell: pwsh
-        run: cmake --build build-inspirator --config Release --target InspiratoEngineSmoke InspiratoR_VST3 --parallel
-
-      - name: Run v3.11 engine regression suite
-        shell: pwsh
-        run: .\build-inspirator\Release\InspiratoEngineSmoke.exe
+      - name: Configure, build and test x64 Release
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
+          where cl
+          cl 2>&1 | findstr /C:"Version"
+          cmake -S InspiratoR_Native -B build-inspirator -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-inspirator --target InspiratoEngineSmoke InspiratoR_VST3 --parallel
+          build-inspirator\InspiratoEngineSmoke.exe
 
       - name: Stage Windows VST3
         shell: pwsh
