@@ -1,0 +1,22 @@
+name: Inspect Myriad ELI Symbol Text
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-eli-grep.yml' ]
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+      - name: Grep ELI symbol definitions
+        run: |
+          f=Myriad/hardware/myriad_0.5/myriad_0.5.kicad_sch
+          grep -n -i -B25 -A80 'ELI2040B' "$f" | head -n 500 | tee eli-grep.txt || true
+          grep -n -i -B10 -A30 'Pin_32' "$f" | head -n 300 | tee -a eli-grep.txt || true
+          grep -n -i -B10 -A30 'Pin_31' "$f" | head -n 300 | tee -a eli-grep.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myriad-eli-grep
+          path: eli-grep.txt
