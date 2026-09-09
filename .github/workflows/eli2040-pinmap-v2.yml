@@ -1,0 +1,61 @@
+name: Trace ELI2040 GPIO Nets
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/eli2040-pinmap-v2.yml' ]
+  workflow_dispatch:
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/Emute-Lab-Instruments/ELI2040.git ELI2040
+      - name: Print every footprint pad on display GPIO nets
+        run: |
+          python3 - <<'PY' | tee gpio-net-trace.txt
+          from pathlib import Path
+          import re
+          wanted={'GPIO2','GPIO3','GPIO16','GPIO17','GPIO18','GPIO19','GP2','GP3','GP16','GP17','GP18','GP19'}
+          def blocks(text, token='(footprint '):
+            out=[]; pos=0
+            while True:
+              i=text.find(token,pos)
+              if i<0: break
+              d=0;q=False;esc=False;j=i
+              while j<len(text):
+                c=text[j]
+                if q:
+                  if esc: esc=False
+                  elif c=='\\': esc=True
+                  elif c=='"': q=False
+                else:
+                  if c=='"': q=True
+                  elif c=='(': d+=1
+                  elif c==')':
+                    d-=1
+                    if d==0: out.append(text[i:j+1]);pos=j+1;break
+                j+=1
+              else: break
+            return out
+          for p in Path('ELI2040').rglob('*.kicad_pcb'):
+            if 'ELI2040b' not in str(p): continue
+            s=p.read_text(errors='ignore')
+            print('PCB',p)
+            for b in blocks(s):
+              hits=[]
+              for m in re.finditer(r'\(pad\s+"?([^"\s\)]+)"?.{0,2000}?\(net\s+\d+\s+"([^"]+)"\)',b,re.S):
+                if m.group(2) in wanted: hits.append((m.group(1),m.group(2)))
+              if hits:
+                name=b.splitlines()[0]
+                refs=re.findall(r'\(property "Reference" "([^"]+)"',b)
+                vals=re.findall(r'\(property "Value" "([^"]+)"',b)
+                print('\n',name,'REF',refs[:2],'VAL',vals[:2])
+                for h in hits: print(' PAD',h[0],'NET',h[1])
+            print('\nNET DECLS:')
+            for line in s.splitlines():
+              if '(net ' in line and any(('"'+w+'"') in line for w in wanted): print(line.strip())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eli2040-gpio-net-trace
+          path: gpio-net-trace.txt
