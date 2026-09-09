@@ -1,0 +1,76 @@
+name: Trace Myriad Display Nets
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-display-net-diagnostic.yml' ]
+  workflow_dispatch:
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone exact Myriad 1.1.2
+        run: git clone --depth 1 --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+      - name: Trace TFT and processor footprints
+        run: |
+          python3 - <<'PY' | tee display-net-trace.txt
+          from pathlib import Path
+          import re
+          p=Path('Myriad/hardware/myriad_0.5/myriad_0.5.kicad_pcb')
+          s=p.read_text(errors='ignore')
+
+          def blocks(text, token):
+              out=[]; start=0
+              while True:
+                  i=text.find(token,start)
+                  if i<0: break
+                  depth=0; j=i; in_str=False; esc=False
+                  while j<len(text):
+                      c=text[j]
+                      if in_str:
+                          if esc: esc=False
+                          elif c=='\\': esc=True
+                          elif c=='"': in_str=False
+                      else:
+                          if c=='"': in_str=True
+                          elif c=='(': depth+=1
+                          elif c==')':
+                              depth-=1
+                              if depth==0:
+                                  out.append(text[i:j+1]); start=j+1; break
+                      j+=1
+                  else: break
+              return out
+
+          fps=blocks(s,'(footprint ')
+          print('FOOTPRINT COUNT',len(fps))
+          candidates=[]
+          for b in fps:
+              head=b[:1000]
+              if re.search(r'GC9A01|RoundTFT|TFT|ELI2040|RP2040|Pico',b,re.I):
+                  candidates.append(b)
+          print('CANDIDATE FOOTPRINTS',len(candidates))
+          for n,b in enumerate(candidates):
+              first=b.splitlines()[0]
+              refs=re.findall(r'\(property "Reference" "([^"]+)"',b)
+              vals=re.findall(r'\(property "Value" "([^"]+)"',b)
+              print('\n=== CANDIDATE',n,'===')
+              print(first)
+              print('REF',refs[:3],'VALUE',vals[:3])
+              for m in re.finditer(r'\(pad\s+"?([^"\s\)]+)"?.{0,1200}?\(net\s+\d+\s+"([^"]+)"\)',b,re.S):
+                  print('PAD',m.group(1),'NET',m.group(2))
+
+          # Print every net involving likely TFT names.
+          print('\n=== LIKELY TFT NET DECLARATIONS ===')
+          for line in s.splitlines():
+              if '(net ' in line and re.search(r'TFT|LCD|SDA|SCL|SCK|CLK|CS|DC|RST|RESET|BLK|BACKLIGHT',line,re.I):
+                  print(line.strip())
+          PY
+      - name: Upload trace
+        uses: actions/upload-artifact@v4
+        with:
+          name: myriad-display-net-trace
+          path: display-net-trace.txt
+          if-no-files-found: error
