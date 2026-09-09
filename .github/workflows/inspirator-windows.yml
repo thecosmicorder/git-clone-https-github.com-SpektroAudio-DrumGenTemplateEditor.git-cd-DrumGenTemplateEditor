@@ -24,18 +24,27 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
+          if errorlevel 1 exit /b %errorlevel%
           subst W: "%GITHUB_WORKSPACE%"
+          if errorlevel 1 exit /b %errorlevel%
           where cl
-          cl 2>&1 | findstr /C:"Version"
+          if errorlevel 1 exit /b %errorlevel%
           cmake -S W:\InspiratoR_Native -B C:\b -G Ninja -DCMAKE_BUILD_TYPE=Release
+          if errorlevel 1 exit /b %errorlevel%
           cmake --build C:\b --target InspiratoEngineSmoke InspiratoR_VST3 --parallel
+          if errorlevel 1 exit /b %errorlevel%
           C:\b\InspiratoEngineSmoke.exe
+          if errorlevel 1 exit /b %errorlevel%
 
       - name: Stage Windows VST3
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $plugin = 'C:\b\InspiratoR_artefacts\Release\VST3\InspiratoR.vst3'
+          if (-not (Test-Path $plugin)) { throw "VST3 bundle missing: $plugin" }
           New-Item -ItemType Directory -Force -Path dist\Windows | Out-Null
-          Copy-Item -Recurse -Force "C:\b\InspiratoR_artefacts\Release\VST3\InspiratoR.vst3" "dist\Windows\InspiratoR.vst3"
+          Copy-Item -Recurse -Force $plugin "dist\Windows\InspiratoR.vst3"
+          if (-not (Test-Path 'dist\Windows\InspiratoR.vst3')) { throw 'Staged VST3 bundle missing' }
 
       - name: Upload Windows VST3
         uses: actions/upload-artifact@v4
