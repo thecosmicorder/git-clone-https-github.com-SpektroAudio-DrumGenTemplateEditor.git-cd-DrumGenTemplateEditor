@@ -1,0 +1,48 @@
+name: Extract Myriad ELI Symbol Pinmap
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-eli-symbol-pinmap.yml' ]
+  workflow_dispatch:
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+      - name: Extract ELI2040 symbol pins and TFT symbol pins
+        run: |
+          python3 - <<'PY' | tee pinmap.txt
+          from pathlib import Path
+          import re
+          s=Path('Myriad/hardware/myriad_0.5/myriad_0.5.kicad_sch').read_text(errors='ignore')
+          def balanced_from(i):
+            d=0;q=False;esc=False;j=i
+            while j<len(s):
+              c=s[j]
+              if q:
+                if esc: esc=False
+                elif c=='\\': esc=True
+                elif c=='"': q=False
+              else:
+                if c=='"': q=True
+                elif c=='(': d+=1
+                elif c==')':
+                  d-=1
+                  if d==0:return s[i:j+1]
+              j+=1
+            return ''
+          for key in ['ELI2040B','RoundTFT_GC9A01','RoundTFT']:
+            print('\n### SEARCH',key)
+            for m in re.finditer(r'\(symbol\s+"[^"]*'+re.escape(key)+r'[^"]*"',s,re.I):
+              b=balanced_from(m.start())
+              print(b.splitlines()[0])
+              # Each pin block contains name and number.
+              for pm in re.finditer(r'\(pin\s+[^\n]+.*?\(name\s+"([^"]+)".*?\(number\s+"([^"]+)"',b,re.S):
+                print('PIN',pm.group(2),'NAME',pm.group(1))
+              print('---')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myriad-eli-symbol-pinmap
+          path: pinmap.txt
