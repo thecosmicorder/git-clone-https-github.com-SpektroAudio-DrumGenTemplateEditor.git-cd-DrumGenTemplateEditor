@@ -1,0 +1,49 @@
+name: Map Myriad A Carrier Pins
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-j2-map.yml' ]
+  workflow_dispatch:
+jobs:
+  map:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+      - name: Print J2 pad to net map
+        run: |
+          python3 - <<'PY' | tee j2-map.txt
+          from pathlib import Path
+          import re
+          s=Path('Myriad/hardware/myriad_0.5/myriad_0.5.kicad_pcb').read_text(errors='ignore')
+          def blocks(text, token='(footprint '):
+            out=[];pos=0
+            while True:
+              i=text.find(token,pos)
+              if i<0: break
+              d=0;q=False;esc=False;j=i
+              while j<len(text):
+                c=text[j]
+                if q:
+                  if esc: esc=False
+                  elif c=='\\': esc=True
+                  elif c=='"': q=False
+                else:
+                  if c=='"': q=True
+                  elif c=='(': d+=1
+                  elif c==')':
+                    d-=1
+                    if d==0: out.append(text[i:j+1]);pos=j+1;break
+                j+=1
+              else: break
+            return out
+          for b in blocks(s):
+            if 'Reference" "J2"' not in b: continue
+            print(b.splitlines()[0])
+            for m in re.finditer(r'\(pad\s+"?([^"\s\)]+)"?.{0,1800}?\(net\s+\d+\s+"([^"]+)"\)',b,re.S):
+              print(f'{m.group(1)}={m.group(2)}')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myriad-j2-map
+          path: j2-map.txt
