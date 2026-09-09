@@ -1,0 +1,150 @@
+name: Build Stock Myriad A Screen Test v1
+
+on:
+  push:
+    branches: [ myriad-safe4-build ]
+    paths: [ '.github/workflows/myriad-stock-a-screen-test-v1.yml' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      MYRIAD_FQBN: rp2040:rp2040:generic:flash=16777216_14680064,freq=200,opt=Optimize3,os=none,profile=Disabled,rtti=Disabled,stackprotect=Disabled,exceptions=Disabled,dbgport=Disabled,dbglvl=None,boot2=boot2_w25q080_2_padded_checksum,usbstack=picosdk,ipbtstack=ipv4only,uploadmethod=default
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Install exact toolchain
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@6.0.0
+          arduino-cli lib install 'ArduinoJson@7.4.3'
+
+      - name: Fetch untouched Myriad 1.1.2
+        run: |
+          git clone --depth 1 --branch 1.1.2 https://github.com/Emute-Lab-Instruments/Myriad.git Myriad
+          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad/Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
+          git -C Myriad rev-parse HEAD | tee MYRIAD_COMMIT.txt
+
+      - name: Restore exact memlp commit and 1.1.2 compatibility shim
+        run: |
+          rm -rf Myriad/Myriad_A/src/memlp
+          git clone https://github.com/MusicallyEmbodiedML/memlp.git Myriad/Myriad_A/src/memlp
+          git -C Myriad/Myriad_A/src/memlp checkout b5a63e8f70b22c0fcdcc4175ba8447ef91512d21
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('Myriad/Myriad_A/src/memlp/Utils.h')
+          s=p.read_text()
+          assert 'enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};' in s
+          s=s.replace('enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU};','enum ACTIVATION_FUNCTIONS {SIGMOID, TANH, LINEAR, RELU, HARDSIGMOID};')
+          marker='//Compute hyperbolic tangent (tanh)\n'
+          hard='''// Myriad 1.1.2 compatibility\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T hardsigmoid(T x) {\n  T y = static_cast<T>(0.2) * x + static_cast<T>(0.5);\n  if (y < static_cast<T>(0)) return static_cast<T>(0);\n  if (y > static_cast<T>(1)) return static_cast<T>(1);\n  return y;\n}\n\ntemplate<typename T>\nMLP_ACTIVATION_FN\ninline T deriv_hardsigmoid(T x) {\n  return (x > static_cast<T>(-2.5) && x < static_cast<T>(2.5)) ? static_cast<T>(0.2) : static_cast<T>(0);\n}\n\n'''
+          assert marker in s
+          s=s.replace(marker,hard+marker)
+          reg='    AddNewPair(ACTIVATION_FUNCTIONS::RELU, &relu<T>, &deriv_relu<T>);'
+          assert reg in s
+          s=s.replace(reg,reg+'\n    AddNewPair(ACTIVATION_FUNCTIONS::HARDSIGMOID, &hardsigmoid<T>, &deriv_hardsigmoid<T>);')
+          p.write_text(s)
+          PY
+
+      - name: Install TFT_eSPI and corrected Myriad Setup303
+        run: |
+          git clone https://github.com/Emute-Lab-Instruments/TFT_eSPI.git TFT_eSPI
+          git -C TFT_eSPI rev-parse HEAD | tee TFT_ESPI_COMMIT.txt
+          cat > TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h <<'EOF'
+          // Reconstructed from Myriad 1.1.2 PCB + ELI2040b GPIO header mapping
+          #define USER_SETUP_ID 303
+          #define GC9A01_DRIVER
+          #define TFT_WIDTH 240
+          #define TFT_HEIGHT 240
+
+          // Myriad A: J2.32/J2.31/J2.15/J2.17/J2.16/J2.18
+          // ELI2040b mapping: GPIO2/GPIO3/GPIO20/GPIO18/GPIO19/GPIO17
+          #define TFT_MOSI 3
+          #define TFT_SCLK 2
+          #define TFT_CS   20
+          #define TFT_DC   18
+          #define TFT_RST  19
+          #define TFT_BL   17
+          #define TFT_BACKLIGHT_ON HIGH
+
+          #define LOAD_GLCD
+          #define LOAD_FONT2
+          #define LOAD_FONT4
+          #define LOAD_FONT6
+          #define LOAD_FONT7
+          #define LOAD_FONT8
+          #define LOAD_GFXFF
+          #define SMOOTH_FONT
+
+          #define SPI_FREQUENCY 40000000
+          #define SPI_READ_FREQUENCY 20000000
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('TFT_eSPI/User_Setup_Select.h')
+          s=p.read_text()
+          line='#include <User_Setup.h>           // Default setup is root library folder'
+          assert line in s
+          s=s.replace(line,'//#include <User_Setup.h>           // Default setup is root library folder\n#include <User_Setups/Setup303_RP2040_GC9A01.h> // Myriad round TFT')
+          p.write_text(s)
+          PY
+          grep -q '#define TFT_CS   20' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q '#define TFT_DC   18' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q '#define TFT_RST  19' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q '#define TFT_BL   17' TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+          grep -q 'TFT_Drivers/GC9A01_Defines.h' TFT_eSPI/User_Setup_Select.h
+
+      - name: Install Myriad and TFT libraries
+        run: |
+          mkdir -p "$HOME/Arduino/libraries"
+          ln -s "$GITHUB_WORKSPACE/Myriad/arduino_libmyriad" "$HOME/Arduino/libraries/arduino_libmyriad"
+          ln -s "$GITHUB_WORKSPACE/TFT_eSPI" "$HOME/Arduino/libraries/TFT_eSPI"
+
+      - name: Prove this is stock oscillator firmware
+        run: |
+          grep -q 'N_OSCILLATOR_MODELS = 13;' Myriad/arduino_libmyriad/oscillatorModels.hpp
+          ! grep -R -q 'safe4PureSineModel' Myriad || false
+          test "$(grep -m1 '#define MYRIAD_VERSION' Myriad/Myriad_A/Myriad_A.ino)" = '#define MYRIAD_VERSION "1.1.2"'
+
+      - name: Compile stock A screen test
+        run: |
+          mkdir -p out
+          arduino-cli compile --clean --fqbn "$MYRIAD_FQBN" --output-dir "$GITHUB_WORKSPACE/out" Myriad/Myriad_A 2>&1 | tee out/compile.log
+          test -s out/Myriad_A.ino.uf2
+          cp out/Myriad_A.ino.uf2 out/Myriad_A_1.1.2_SCREEN_TEST_v1.uf2
+          sha256sum out/Myriad_A_1.1.2_SCREEN_TEST_v1.uf2 | tee out/SHA256.txt
+          grep -E 'Sketch uses|Global variables use' out/compile.log | tee out/MEMORY.txt || true
+
+      - name: Package test evidence
+        run: |
+          cat > out/README_TEST.txt <<'EOF'
+          STOCK MYRIAD 1.1.2 A SCREEN TEST v1
+          No SAFE4 oscillator modifications are present.
+          Flash LEFT/A only. Leave RIGHT/B on official 1.1.2.
+          Corrected display mapping:
+            SCLK GPIO2
+            MOSI GPIO3
+            CS GPIO20
+            DC GPIO18
+            RESET GPIO19
+            BACKLIGHT GPIO17, active HIGH
+          This is a hardware display test, not yet factory-proven.
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Myriad-stock-A-screen-test-v1
+          path: |
+            out/Myriad_A_1.1.2_SCREEN_TEST_v1.uf2
+            out/SHA256.txt
+            out/MEMORY.txt
+            out/compile.log
+            out/README_TEST.txt
+            TFT_eSPI/User_Setups/Setup303_RP2040_GC9A01.h
+            MYRIAD_COMMIT.txt
+            TFT_ESPI_COMMIT.txt
+          if-no-files-found: error
