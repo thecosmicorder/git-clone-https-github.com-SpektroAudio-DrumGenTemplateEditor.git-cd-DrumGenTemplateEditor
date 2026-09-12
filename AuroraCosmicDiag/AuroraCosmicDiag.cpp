@@ -41,7 +41,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     }
 }
 
-void Leds(){
+void UpdateLeds(){
     hw.ClearLeds();
     hw.SetLed(LED_1,0.0f,0.0f,0.15f+0.85f*ui_time);      // blue
     hw.SetLed(LED_2,0.15f+0.85f*ui_fb,0.0f,0.0f);        // red
@@ -65,5 +65,5 @@ int main(void){
     dl.Init(); dr.Init(); dl.SetDelay(sr*0.18f); dr.SetDelay(sr*0.19f);
     hw.SetAudioBlockSize(4);
     hw.StartAudio(AudioCallback);
-    while(1){Leds(); System::Delay(10);} 
+    while(1){UpdateLeds(); System::Delay(10);} 
 }
